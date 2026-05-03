@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useCodexGraphqlRequest, useCodexNavigation } from './CodexAdapters';
 import { noteHref } from './CodexTree';
@@ -15,7 +15,7 @@ type LooseGraphProps = Record<string, unknown>;
 const ForceGraph2D = dynamic(
   () => import('react-force-graph-2d'),
   { ssr: false, loading: () => <div className={styles.spinnerWrap}>Loading graph engine…</div> },
-) as unknown as React.ComponentType<LooseGraphProps>;
+) as unknown as React.ComponentType<LooseGraphProps & { ref?: React.Ref<unknown> }>;
 
 const GRAPH_QUERY = `
   query VaultGraph($scope: String) {
@@ -78,6 +78,28 @@ interface Props {
   scope?: string;
 }
 
+// Curated palette — saturated enough to read on a dark canvas, but harmonious
+// rather than the random-hue salad of `hsl(<hash> 60% 65%)`. Folders cycle
+// through this list deterministically (by sorted folder name index).
+const FOLDER_PALETTE = [
+  '#60a5fa', // blue
+  '#34d399', // emerald
+  '#fbbf24', // amber
+  '#f87171', // red
+  '#a78bfa', // violet
+  '#22d3ee', // cyan
+  '#fb7185', // rose
+  '#4ade80', // lime
+  '#c084fc', // purple
+  '#fb923c', // orange
+  '#2dd4bf', // teal
+  '#facc15', // yellow
+];
+
+// Supernode color — a distinct, brighter shade so the folder-overview view
+// reads as "these are categories, not notes."
+const SUPERNODE_COLOR = '#93c5fd';
+
 export default function CodexGraph({ scope }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
   const { useRouter: useNavRouter } = useCodexNavigation();
@@ -89,7 +111,11 @@ export default function CodexGraph({ scope }: Props) {
     height: 600,
   });
   const [isMobile, setIsMobile] = useState(false);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [folderFilter, setFolderFilter] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
+  const fgRef = useRef<unknown>(null);
 
   // Mobile detection — react-force-graph performs poorly under 768px.
   useEffect(() => {
@@ -119,6 +145,9 @@ export default function CodexGraph({ scope }: Props) {
     let cancelled = false;
     setData(null);
     setError(null);
+    setHoveredId(null);
+    setSearch('');
+    setFolderFilter(new Set());
     (async () => {
       try {
         const { data: payload, errors } = await graphqlRequest<{
@@ -139,6 +168,38 @@ export default function CodexGraph({ scope }: Props) {
     };
   }, [scope]);
 
+  // Stable folder → palette index map.
+  const folderColorMap = useMemo(() => {
+    if (!data) return new Map<string, string>();
+    const folders = Array.from(new Set(data.nodes.map((n) => n.folder))).sort();
+    return new Map(folders.map((f, i) => [f, FOLDER_PALETTE[i % FOLDER_PALETTE.length]]));
+  }, [data]);
+
+  // Adjacency map for hover-highlight and local-mode neighbor lookup.
+  const neighbors = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    if (!data) return map;
+    data.nodes.forEach((n) => map.set(n.id, new Set()));
+    data.edges.forEach((e) => {
+      map.get(e.from)?.add(e.to);
+      map.get(e.to)?.add(e.from);
+    });
+    return map;
+  }, [data]);
+
+  // PageRank-based "is this label important enough to render at this zoom"
+  // threshold lookup. We pre-compute a percentile rank so the show/hide
+  // decision is constant-time per frame.
+  const pageRankPercentile = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!data) return map;
+    const sorted = [...data.nodes].sort((a, b) => a.pageRank - b.pageRank);
+    sorted.forEach((n, i) => {
+      map.set(n.id, sorted.length === 1 ? 1 : i / (sorted.length - 1));
+    });
+    return map;
+  }, [data]);
+
   // For folder subgraphs, pre-position notes in a golden-angle spiral with
   // radius = 1 - pageRank so hubs end up central. The force simulation will
   // fine-tune from there.
@@ -148,13 +209,102 @@ export default function CodexGraph({ scope }: Props) {
     const sorted = [...data.nodes].sort((a, b) => b.pageRank - a.pageRank);
     const maxRank = Math.max(1e-9, ...sorted.map((n) => n.pageRank));
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const r = Math.min(size.width, size.height) / 2 - 60;
+    const r = Math.min(size.width, size.height) / 2 - 80;
     return sorted.map((n, i) => ({
       ...n,
       x: Math.cos(i * goldenAngle) * (1 - n.pageRank / maxRank) * r,
       y: Math.sin(i * goldenAngle) * (1 - n.pageRank / maxRank) * r,
     }));
   }, [data, size.width, size.height]);
+
+  // Tune the d3 force simulation for less hairball on dense graphs. We push
+  // the link distance way out from the library default of ~30 and crank charge
+  // (repulsion) so unrelated nodes find their own breathing room. We mutate
+  // the existing forces (link, charge) rather than importing d3-force as a
+  // new dep — react-force-graph-2d already wires those up internally.
+  useEffect(() => {
+    const fg = fgRef.current as
+      | { d3Force?: (name: string, force?: unknown) => unknown; d3ReheatSimulation?: () => void }
+      | null;
+    if (!fg || !data) return;
+    const linkForce = fg.d3Force?.('link') as
+      | { distance: (n: number) => unknown; strength: (n: number) => unknown }
+      | undefined;
+    if (linkForce) {
+      // Supernode view: very wide spacing (only ~13 nodes, lots of canvas).
+      // Folder subgraph: tighter, but still wider than the library default.
+      const baseDist = data.scope ? 80 : 180;
+      linkForce.distance(baseDist);
+      linkForce.strength(0.4);
+    }
+    const chargeForce = fg.d3Force?.('charge') as
+      | { strength: (n: number) => unknown; distanceMax?: (n: number) => unknown }
+      | undefined;
+    if (chargeForce) {
+      // Negative = repulsion. Bigger negative = more space between nodes.
+      chargeForce.strength(data.scope ? -250 : -500);
+      // Cap effective distance so far-away nodes don't slow the simulation.
+      chargeForce.distanceMax?.(data.scope ? 500 : 800);
+    }
+    // Reheat so the new params take effect on already-positioned data.
+    fg.d3ReheatSimulation?.();
+  }, [data]);
+
+  // Dim/highlight rules — node/link visibility for filter, alpha for hover.
+  const matchesSearch = useCallback(
+    (n: CodexGraphNode): boolean => {
+      if (!search.trim()) return true;
+      return n.label.toLowerCase().includes(search.toLowerCase());
+    },
+    [search],
+  );
+
+  const passesFolderFilter = useCallback(
+    (n: CodexGraphNode): boolean => {
+      if (folderFilter.size === 0) return true;
+      return folderFilter.has(n.folder);
+    },
+    [folderFilter],
+  );
+
+  const isVisible = useCallback(
+    (n: CodexGraphNode): boolean => matchesSearch(n) && passesFolderFilter(n),
+    [matchesSearch, passesFolderFilter],
+  );
+
+  const linkIsVisible = useCallback(
+    (l: { source: CodexGraphNode | string; target: CodexGraphNode | string }): boolean => {
+      const sId = typeof l.source === 'string' ? l.source : l.source.id;
+      const tId = typeof l.target === 'string' ? l.target : l.target.id;
+      // Link visible if both endpoints are visible per filters.
+      const sNode = data?.nodes.find((n) => n.id === sId);
+      const tNode = data?.nodes.find((n) => n.id === tId);
+      if (!sNode || !tNode) return false;
+      return isVisible(sNode) && isVisible(tNode);
+    },
+    [data, isVisible],
+  );
+
+  // For hover dimming: the node + its neighbors stay full-bright; everything
+  // else dims. Memoized as a hot-path function (called per node per frame).
+  const isHotForHover = useCallback(
+    (id: string): boolean => {
+      if (!hoveredId) return true;
+      if (id === hoveredId) return true;
+      return neighbors.get(hoveredId)?.has(id) ?? false;
+    },
+    [hoveredId, neighbors],
+  );
+
+  const linkIsHotForHover = useCallback(
+    (l: { source: CodexGraphNode | string; target: CodexGraphNode | string }): boolean => {
+      if (!hoveredId) return true;
+      const sId = typeof l.source === 'string' ? l.source : l.source.id;
+      const tId = typeof l.target === 'string' ? l.target : l.target.id;
+      return sId === hoveredId || tId === hoveredId;
+    },
+    [hoveredId],
+  );
 
   if (isMobile) {
     return <MobileFallback />;
@@ -169,9 +319,76 @@ export default function CodexGraph({ scope }: Props) {
   }
 
   const links = data.edges.map((e) => ({ source: e.from, target: e.to, weight: e.weight }));
+  const visibleNodeCount = data.nodes.filter(isVisible).length;
+  const folders = Array.from(folderColorMap.keys());
+
+  // Adaptive label-visibility threshold — at low zoom (zoomed out), only show
+  // the top-N labels by pageRank. As you zoom in, more labels appear.
+  // pctThreshold is "show labels for nodes whose pageRank percentile >= this".
+  const labelThreshold = (globalScale: number): number => {
+    if (globalScale >= 2.5) return 0; // Very zoomed in: show all
+    if (globalScale >= 1.5) return 0.4; // Mid: top 60%
+    if (globalScale >= 0.8) return 0.7; // Default: top 30%
+    return 0.9; // Zoomed way out: only top 10%
+  };
 
   return (
     <div className={styles.graphRoot}>
+      <div className={styles.graphToolbar}>
+        <input
+          type="search"
+          className={styles.graphSearch}
+          placeholder="Search nodes…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className={styles.graphFolderFilter}>
+          {folders.map((f) => {
+            const active = folderFilter.has(f);
+            return (
+              <button
+                key={f}
+                type="button"
+                className={active ? styles.graphFolderChipActive : styles.graphFolderChip}
+                style={{
+                  borderColor: folderColorMap.get(f) ?? '#888',
+                  background: active
+                    ? `${folderColorMap.get(f) ?? '#888'}33`
+                    : 'transparent',
+                }}
+                onClick={() => {
+                  setFolderFilter((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(f)) next.delete(f);
+                    else next.add(f);
+                    return next;
+                  });
+                }}
+                title={`Toggle folder: ${f}`}
+              >
+                <span
+                  className={styles.graphFolderChipDot}
+                  style={{ background: folderColorMap.get(f) ?? '#888' }}
+                />
+                {f.replace(/^\d+\s*-\s*/, '')}
+              </button>
+            );
+          })}
+          {(folderFilter.size > 0 || search) && (
+            <button
+              type="button"
+              className={styles.graphResetButton}
+              onClick={() => {
+                setFolderFilter(new Set());
+                setSearch('');
+              }}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className={styles.graphHeader}>
         {data.scope ? (
           <>
@@ -183,13 +400,18 @@ export default function CodexGraph({ scope }: Props) {
               ← All folders
             </button>
             <span className={styles.graphScopeLabel}>{data.scope}</span>
-            <span className={styles.graphMeta}>{data.nodes.length} notes</span>
+            <span className={styles.graphMeta}>
+              {visibleNodeCount}
+              {visibleNodeCount !== data.nodes.length ? ` / ${data.nodes.length}` : ''} notes
+            </span>
           </>
         ) : (
           <>
             <span className={styles.graphScopeLabel}>All folders</span>
             <span className={styles.graphMeta}>
-              {data.nodes.length} folders · {data.edges.length} cross-folder links
+              {visibleNodeCount}
+              {visibleNodeCount !== data.nodes.length ? ` / ${data.nodes.length}` : ''} folders ·{' '}
+              {data.edges.length} cross-folder links
             </span>
           </>
         )}
@@ -197,54 +419,80 @@ export default function CodexGraph({ scope }: Props) {
 
       <div ref={containerRef} className={styles.graphCanvas}>
         <ForceGraph2D
+          ref={fgRef as React.Ref<unknown>}
           graphData={{ nodes: positionedNodes, links }}
           width={size.width}
           height={size.height}
           nodeId="id"
+          nodeVisibility={(n: CodexGraphNode) => isVisible(n)}
+          linkVisibility={(l: { source: CodexGraphNode | string; target: CodexGraphNode | string }) =>
+            linkIsVisible(l)
+          }
           nodeLabel={(n: CodexGraphNode) =>
             n.kind === 'SUPERNODE'
-              ? `${n.label} (${n.noteCount} notes)`
-              : `${n.label} · pr ${(n.pageRank * 100).toFixed(2)}`
+              ? `${n.label} · ${n.noteCount ?? 0} notes`
+              : `${n.label} · pr ${(n.pageRank * 100).toFixed(2)} · ${n.folder}`
           }
+          onNodeHover={(n: CodexGraphNode | null) => setHoveredId(n?.id ?? null)}
           nodeCanvasObject={(
             n: CodexGraphNode & { x?: number; y?: number },
             ctx: CanvasRenderingContext2D,
             globalScale: number,
           ) => {
-            // Always-visible label (closes #208). Draws the dot + label text in
-            // canvas space so users don't have to hover to identify nodes.
-            // We size + color the dot with the same heuristic the legacy
-            // nodeVal/nodeColor props would have used.
             if (n.x === undefined || n.y === undefined) return;
             const radius = nodeRadius(n);
+            const hot = isHotForHover(n.id);
+            const baseAlpha = hot ? 1 : 0.18;
+            const color = n.kind === 'SUPERNODE'
+              ? SUPERNODE_COLOR
+              : (folderColorMap.get(n.folder) ?? '#9aa3b2');
+
+            // Glow for hover-target / hover-neighbors.
+            if (hoveredId && hot && globalScale > 0.4) {
+              ctx.save();
+              const glow = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, radius * 3.5);
+              glow.addColorStop(0, withAlpha(color, 0.4));
+              glow.addColorStop(1, withAlpha(color, 0));
+              ctx.fillStyle = glow;
+              ctx.beginPath();
+              ctx.arc(n.x, n.y, radius * 3.5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
+
             // Dot.
             ctx.beginPath();
             ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
-            ctx.fillStyle = n.kind === 'SUPERNODE' ? '#78c8ff' : folderColor(n.folder);
+            ctx.fillStyle = withAlpha(color, baseAlpha);
             ctx.fill();
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
-            ctx.lineWidth = 0.5;
+            ctx.strokeStyle = hoveredId === n.id
+              ? withAlpha('#ffffff', 0.9)
+              : withAlpha('#000000', 0.35 * baseAlpha);
+            ctx.lineWidth = hoveredId === n.id ? 1.5 : 0.5;
             ctx.stroke();
-            // Label.
+
+            // Label visibility — show if hovered/neighbor (always), or if this
+            // node's pageRank percentile is above the zoom-dependent threshold.
+            const pct = pageRankPercentile.get(n.id) ?? 0;
+            const threshold = labelThreshold(globalScale);
+            const showLabel =
+              n.kind === 'SUPERNODE' ||
+              (hoveredId && hot) ||
+              pct >= threshold;
+            if (!showLabel) return;
+
             const label = truncateLabel(n.label, n.kind === 'SUPERNODE' ? 30 : 22);
             const fontSize = Math.max(9, 12 / globalScale);
             ctx.font = `${n.kind === 'SUPERNODE' ? '600 ' : ''}${fontSize}px system-ui, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            const textWidth = ctx.measureText(label).width;
-            const padX = 4 / globalScale;
-            const padY = 2 / globalScale;
             const labelY = n.y + radius + 3 / globalScale;
-            // Background plate for legibility.
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-            ctx.fillRect(
-              n.x - textWidth / 2 - padX,
-              labelY,
-              textWidth + padX * 2,
-              fontSize + padY * 2,
-            );
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-            ctx.fillText(label, n.x, labelY + padY);
+            // Outline-style text for legibility without a heavy background plate.
+            ctx.lineWidth = 3 / globalScale;
+            ctx.strokeStyle = withAlpha('#000000', 0.7 * baseAlpha);
+            ctx.strokeText(label, n.x, labelY);
+            ctx.fillStyle = withAlpha('#ffffff', 0.95 * baseAlpha);
+            ctx.fillText(label, n.x, labelY);
           }}
           nodePointerAreaPaint={(
             n: CodexGraphNode & { x?: number; y?: number },
@@ -259,14 +507,37 @@ export default function CodexGraph({ scope }: Props) {
             ctx.arc(n.x, n.y, nodeRadius(n), 0, Math.PI * 2);
             ctx.fill();
           }}
-          linkWidth={(l: { weight: number }) => Math.max(0.5, Math.log1p(l.weight))}
-          linkColor={() => 'rgba(180, 180, 200, 0.3)'}
-          linkDirectionalParticles={(l: { weight: number }) =>
-            l.weight > 2 ? Math.min(3, Math.floor(l.weight / 2)) : 0
-          }
-          linkDirectionalParticleSpeed={0.005}
+          linkColor={(l: {
+            weight: number;
+            source: CodexGraphNode | string;
+            target: CodexGraphNode | string;
+          }) => {
+            const hot = linkIsHotForHover(l);
+            const baseAlpha = hot ? 0.55 : 0.08;
+            // Slight folder-color tint at the source side for cross-folder
+            // legibility. We just use a neutral grey for now (canvas2d doesn't
+            // do gradient links easily without per-segment paint).
+            return withAlpha('#b8c1d4', baseAlpha);
+          }}
+          linkWidth={(l: { weight: number }) => Math.max(0.8, Math.log1p(l.weight) * 1.2)}
+          linkCurvature={data.scope ? 0.15 : 0.05}
+          linkDirectionalParticles={(l: {
+            weight: number;
+            source: CodexGraphNode | string;
+            target: CodexGraphNode | string;
+          }) => {
+            // Particles only when this link is "hot" via hover, otherwise the
+            // canvas churn dominates idle frames.
+            if (!hoveredId || !linkIsHotForHover(l)) return 0;
+            return Math.min(4, Math.max(1, Math.floor(l.weight)));
+          }}
+          linkDirectionalParticleSpeed={0.008}
+          linkDirectionalParticleWidth={2}
           backgroundColor="rgba(0, 0, 0, 0)"
-          cooldownTicks={100}
+          cooldownTicks={300}
+          d3AlphaDecay={0.02}
+          d3VelocityDecay={0.35}
+          warmupTicks={50}
           onNodeClick={(node: CodexGraphNode) => {
             if (node.kind === 'SUPERNODE') {
               router.push(`/admin/codex/graph?scope=${encodeURIComponent(node.id)}`);
@@ -280,26 +551,39 @@ export default function CodexGraph({ scope }: Props) {
   );
 }
 
-function folderColor(folder: string): string {
-  // Stable, deterministic color from the folder name.
-  let h = 0;
-  for (let i = 0; i < folder.length; i++) {
-    h = (h * 31 + folder.charCodeAt(i)) | 0;
-  }
-  const hue = Math.abs(h) % 360;
-  return `hsl(${hue} 60% 65%)`;
-}
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function nodeRadius(n: CodexGraphNode): number {
   // Mirrors the legacy `nodeVal` heuristic but as a real radius (not the
   // sqrt-applied area react-force-graph uses internally). Tuned so supernodes
   // dominate visually and per-folder note-radii spread enough to read.
-  if (n.kind === 'SUPERNODE') return Math.max(8, Math.sqrt((n.noteCount ?? 1) * 4));
-  return Math.max(3, Math.sqrt(n.pageRank * 4000));
+  if (n.kind === 'SUPERNODE') return Math.max(10, Math.sqrt((n.noteCount ?? 1) * 5));
+  return Math.max(3.5, Math.sqrt(n.pageRank * 4500));
 }
 
 function truncateLabel(label: string, max: number): string {
   return label.length > max ? label.slice(0, max - 1) + '…' : label;
+}
+
+// Paint helper — accept hex or rgba and reapply alpha.
+function withAlpha(color: string, alpha: number): string {
+  if (color.startsWith('rgba')) {
+    return color.replace(/rgba\(([^)]+)\)/, (_m, inner) => {
+      const parts = inner.split(',').map((p: string) => p.trim());
+      return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
+    });
+  }
+  if (color.startsWith('#')) {
+    const hex = color.slice(1);
+    const expanded = hex.length === 3
+      ? hex.split('').map((c) => c + c).join('')
+      : hex;
+    const r = parseInt(expanded.slice(0, 2), 16);
+    const g = parseInt(expanded.slice(2, 4), 16);
+    const b = parseInt(expanded.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return color;
 }
 
 function MobileFallback() {

@@ -433,6 +433,89 @@
   min-height: 500px;
 }
 
+.graphToolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.graphSearch {
+  flex: 0 0 auto;
+  min-width: 14rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary);
+}
+
+.graphSearch:focus {
+  outline: none;
+  border-color: var(--accent, #60a5fa);
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.25);
+}
+
+.graphFolderFilter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.graphFolderChip,
+.graphFolderChipActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--text-primary);
+  background: transparent;
+  transition: background-color 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
+}
+
+.graphFolderChip:hover,
+.graphFolderChipActive:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+}
+
+.graphFolderChipActive {
+  font-weight: 600;
+}
+
+.graphFolderChipDot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.graphResetButton {
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.7rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.graphResetButton:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary);
+}
+
 .graphHeader {
   display: flex;
   align-items: center;
