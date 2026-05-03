@@ -1,0 +1,82 @@
+{
+  "name": "@chriscase/ostracon",
+  "version": "0.1.0",
+  "description": "Ostracon — markdown vault editor for the modern scribe.",
+  "license": "Apache-2.0",
+  "author": "Chris Case <cc@chriscase.cc>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chriscase/ostracon.git"
+  },
+  "homepage": "https://github.com/chriscase/ostracon#readme",
+  "main": "src/server/index.ts",
+  "types": "src/server/index.ts",
+  "exports": {
+    "./server": "./src/server/index.ts",
+    "./server/client": "./src/server/client.ts",
+    "./ui": "./src/ui/index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "peerDependencies": {
+    "@prisma/client": ">=5",
+    "@uiw/react-md-editor": ">=4",
+    "graphql": ">=16",
+    "graphology": ">=0.26",
+    "graphology-metrics": ">=2",
+    "gray-matter": ">=4",
+    "next": ">=14",
+    "react": ">=18",
+    "react-dom": ">=18",
+    "react-force-graph-2d": ">=1",
+    "react-markdown": ">=10",
+    "rehype-autolink-headings": ">=7",
+    "rehype-slug": ">=6",
+    "remark-gfm": ">=4",
+    "simple-git": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "@uiw/react-md-editor": { "optional": true },
+    "next": { "optional": true },
+    "react": { "optional": true },
+    "react-dom": { "optional": true },
+    "react-force-graph-2d": { "optional": true },
+    "react-markdown": { "optional": true },
+    "rehype-autolink-headings": { "optional": true },
+    "rehype-slug": { "optional": true },
+    "remark-gfm": { "optional": true }
+  },
+  "devDependencies": {
+    "@prisma/client": "^5.7.1",
+    "@types/node": "^20.10.5",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "@uiw/react-md-editor": "^4.1.0",
+    "graphology": "^0.26.0",
+    "graphology-metrics": "^2.4.0",
+    "graphql": "^16.8.1",
+    "gray-matter": "^4.0.3",
+    "next": "^14.0.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-force-graph-2d": "^1.29.1",
+    "react-markdown": "^10.1.0",
+    "rehype-autolink-headings": "^7.1.0",
+    "rehype-slug": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "simple-git": "^3.36.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.18"
+  }
+}
