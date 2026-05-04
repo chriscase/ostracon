@@ -137,12 +137,6 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [folderFilter, setFolderFilter] = useState<Set<string>>(new Set());
-  // Local-graph mode: when focusedId is set, only nodes within focusDepth
-  // hops of focusedId are visible. Shift+click a node to enter; click
-  // empty stage or the × badge to exit.
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [focusedLabel, setFocusedLabel] = useState<string>('');
-  const [focusDepth, setFocusDepth] = useState<number>(2);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<unknown>(null);
@@ -152,8 +146,6 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
     folderFilter: new Set<string>(),
     hoveredId: null as string | null,
     neighbors: null as Set<string> | null,
-    focusVisible: null as Set<string> | null,
-    focusedId: null as string | null,
   });
 
   // Mobile detection — Sigma performs poorly under 768px and the labels are
@@ -175,8 +167,6 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
     setHoveredId(null);
     setSearch('');
     setFolderFilter(new Set());
-    setFocusedId(null);
-    setFocusedLabel('');
     (async () => {
       try {
         if (noteFocus) {
@@ -378,54 +368,32 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
       graphRef.current = graph;
       sigmaInstance = sigma as unknown as { kill: () => void };
 
-      // Click navigation. Shift+click = enter local-graph mode (focus on
-      // node + N-hop neighborhood). Regular click = navigate.
-      sigma.on(
-        'clickNode',
-        ({
-          node,
-          event,
-        }: {
-          node: string;
-          event: { original: MouseEvent | TouchEvent };
-        }) => {
-          const a = graph.getNodeAttributes(node) as { kind: string; label: string };
-          const isMouse = 'shiftKey' in event.original;
-          const shift = isMouse && (event.original as MouseEvent).shiftKey;
-          // In noteFocus mode, shift+click re-pivots the linkages view onto
-          // the clicked note — instant drill-deeper without going back through
-          // the editor. Strip .md + segment-encode to dodge the next-intl
-          // middleware's "any URL containing a dot is a static asset" rule.
-          if (noteFocus && shift) {
-            const url =
-              '/admin/codex/graph/note/' +
-              node
-                .replace(/\.md$/i, '')
-                .split(/[\\/]/g)
-                .map((seg) => encodeURIComponent(seg))
-                .join('/');
-            router.push(url);
-            return;
-          }
-          // Outside noteFocus mode, shift+click enters the in-view local
-          // BFS focus (existing behavior).
-          if (shift) {
-            setFocusedId(node);
-            setFocusedLabel(a.label);
-            return;
-          }
-          if (a.kind === 'SUPERNODE') {
-            router.push(`/admin/codex/graph?scope=${encodeURIComponent(node)}`);
-          } else {
-            router.push(noteHref(node));
-          }
-        },
-      );
-
-      // Click on empty stage exits local-graph mode.
-      sigma.on('clickStage', () => {
-        setFocusedId(null);
-        setFocusedLabel('');
+      // Click navigation:
+      //   • Click a SUPERNODE (folder bubble) → drill into that folder's notes
+      //   • Click a NOTE → jump to its cross-folder linkages page
+      // No special key combos. The previous shift+click "in-view local filter"
+      // mode was confusing because in tightly-connected subgraphs (e.g. all
+      // notes in one folder) it visibly did nothing — every node was already
+      // in N hops. Replaced with this simpler model: clicking a note always
+      // takes you to the FULL cross-folder neighborhood for that note, which
+      // is qualitatively different from any current view and always informative.
+      sigma.on('clickNode', ({ node }: { node: string }) => {
+        const a = graph.getNodeAttributes(node) as { kind: string };
+        if (a.kind === 'SUPERNODE') {
+          router.push(`/admin/codex/graph?scope=${encodeURIComponent(node)}`);
+          return;
+        }
+        // Note → linkages page. Strip .md + segment-encode to dodge the
+        // next-intl middleware's "any URL containing a dot is a static asset"
+        // rule.
+        const url =
+          '/admin/codex/graph/note/' +
+          node
+            .replace(/\.md$/i, '')
+            .split(/[\\/]/g)
+            .map((seg) => encodeURIComponent(seg))
+            .join('/');
+        router.push(url);
       });
 
       // Hover state — bubble up to React, the reducer effect picks it up.
@@ -469,19 +437,9 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
       folderFilter,
       hoveredId,
       neighbors: hoveredId ? new Set(graph.neighbors(hoveredId)) : null,
-      focusVisible: focusedId
-        ? bfsNeighborhood(graph, focusedId, focusDepth)
-        : null,
-      focusedId,
     };
     sigma.refresh();
-    // After a focus change, re-fit the camera to the visible subgraph.
-    if (focusedId) {
-      const camera = (sigma as unknown as { getCamera: () => { animatedReset: (opts: { duration: number }) => void } })
-        .getCamera();
-      setTimeout(() => camera.animatedReset({ duration: 500 }), 50);
-    }
-  }, [search, folderFilter, hoveredId, focusedId, focusDepth]);
+  }, [search, folderFilter, hoveredId]);
 
   if (isMobile) return <MobileFallback />;
   if (error) return <div className={styles.error}>{error}</div>;
@@ -550,11 +508,11 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
             className={styles.graphHint}
             title={
               noteFocus
-                ? 'Shift+click any note to pivot the linkages view onto that note'
-                : 'Shift+click any node to focus on its neighborhood'
+                ? 'Click any other note to pivot the linkages view onto it'
+                : 'Click a folder bubble to drill in. Click a note to see its full cross-folder linkages.'
             }
           >
-            {noteFocus ? '⇧ click → re-pivot' : '⇧ click → local view'}
+            {noteFocus ? 'click → re-pivot' : 'click → drill in / linkages'}
           </span>
         </div>
       </div>
@@ -603,36 +561,6 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
         )}
       </div>
 
-      {focusedId && (
-        <div className={styles.graphFocusBanner}>
-          <span className={styles.graphFocusLabel}>
-            <strong>Local view:</strong> {focusedLabel}
-          </span>
-          <label className={styles.graphFocusDepth}>
-            <span>Depth</span>
-            <input
-              type="range"
-              min={1}
-              max={3}
-              value={focusDepth}
-              onChange={(e) => setFocusDepth(Number(e.target.value))}
-            />
-            <span className={styles.graphFocusDepthValue}>{focusDepth}</span>
-          </label>
-          <button
-            type="button"
-            className={styles.graphFocusClose}
-            onClick={() => {
-              setFocusedId(null);
-              setFocusedLabel('');
-            }}
-            title="Exit local-graph view"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
       <div ref={containerRef} className={styles.graphCanvas} />
     </div>
   );
@@ -645,14 +573,11 @@ type ReducerStateRef = React.MutableRefObject<{
   folderFilter: Set<string>;
   hoveredId: string | null;
   neighbors: Set<string> | null;
-  focusVisible: Set<string> | null;
-  focusedId: string | null;
 }>;
 
 function makeNodeReducer(stateRef: ReducerStateRef) {
   return (node: string, attrs: Record<string, unknown>) => {
-    const { search, folderFilter, hoveredId, neighbors, focusVisible, focusedId } =
-      stateRef.current;
+    const { search, folderFilter, hoveredId, neighbors } = stateRef.current;
 
     // Apply text + folder filters.
     const label = String(attrs.label ?? '');
@@ -662,15 +587,6 @@ function makeNodeReducer(stateRef: ReducerStateRef) {
     }
     if (folderFilter.size > 0 && !folderFilter.has(folder)) {
       return { ...attrs, hidden: true };
-    }
-
-    // Local-graph mode: hide nodes outside the focused N-hop neighborhood.
-    if (focusVisible && !focusVisible.has(node)) {
-      return { ...attrs, hidden: true };
-    }
-    // The focused node itself gets a subtle highlight.
-    if (focusedId && node === focusedId) {
-      return { ...attrs, forceLabel: true, zIndex: 3, highlighted: true };
     }
 
     // Apply hover dim — non-neighbors fade.
@@ -703,7 +619,7 @@ function makeEdgeReducer(
   },
 ) {
   return (edge: string, attrs: Record<string, unknown>) => {
-    const { search, folderFilter, hoveredId, focusVisible } = stateRef.current;
+    const { search, folderFilter, hoveredId } = stateRef.current;
 
     const sId = graph.source(edge);
     const tId = graph.target(edge);
@@ -716,12 +632,10 @@ function makeEdgeReducer(
 
     const sHidden =
       (search && !sLabel.toLowerCase().includes(search.toLowerCase())) ||
-      (folderFilter.size > 0 && !folderFilter.has(sFolder)) ||
-      (focusVisible && !focusVisible.has(sId));
+      (folderFilter.size > 0 && !folderFilter.has(sFolder));
     const tHidden =
       (search && !tLabel.toLowerCase().includes(search.toLowerCase())) ||
-      (folderFilter.size > 0 && !folderFilter.has(tFolder)) ||
-      (focusVisible && !focusVisible.has(tId));
+      (folderFilter.size > 0 && !folderFilter.has(tFolder));
     if (sHidden || tHidden) return { ...attrs, hidden: true };
 
     if (hoveredId) {
@@ -734,32 +648,6 @@ function makeEdgeReducer(
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-// BFS the N-hop neighborhood of `source` and return the set of node IDs
-// (including the source itself). Used by local-graph mode.
-function bfsNeighborhood(
-  graph: { neighbors: (id: string) => string[]; hasNode: (id: string) => boolean },
-  source: string,
-  depth: number,
-): Set<string> {
-  if (!graph.hasNode(source)) return new Set([source]);
-  const visited = new Set<string>([source]);
-  let frontier: string[] = [source];
-  for (let d = 0; d < depth; d++) {
-    const next: string[] = [];
-    for (const n of frontier) {
-      for (const neighbor of graph.neighbors(n)) {
-        if (!visited.has(neighbor)) {
-          visited.add(neighbor);
-          next.push(neighbor);
-        }
-      }
-    }
-    frontier = next;
-    if (frontier.length === 0) break;
-  }
-  return visited;
-}
 
 // Lighten / darken a hex color by amt in [-1, 1]. Negative = darker.
 function shadeHex(hex: string, amt: number): string {

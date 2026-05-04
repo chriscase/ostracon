@@ -450,8 +450,18 @@ function NoteTreeItem({
     [multiSelect, node.path],
   );
 
+  // Linkages page URL: same encoding scheme as noteHref (strip .md, segment-
+  // encode) — required to dodge the next-intl middleware static-asset filter.
+  const linkagesHref =
+    '/admin/codex/graph/note/' +
+    node.path
+      .replace(/\.md$/i, '')
+      .split(/[\\/]/g)
+      .map((seg) => encodeURIComponent(seg))
+      .join('/');
+
   return (
-    <li>
+    <li className={styles.noteRowWrap}>
       <Link
         href={noteHref(node.path)}
         className={`${styles.noteRow} ${isSelected ? styles.noteRowActive : ''} ${isMultiSelected ? styles.noteRowMultiSelected : ''}`}
@@ -470,6 +480,15 @@ function NoteTreeItem({
           <span className={styles.autoBadge}>auto</span>
         )}
       </Link>
+      <a
+        href={linkagesHref}
+        className={styles.noteRowLinkagesIcon}
+        title="Show this note's link graph (across all folders)"
+        aria-label="Show linkages"
+        onClick={(e) => e.stopPropagation()}
+      >
+        🕸
+      </a>
       {menuOpen && menuItems.length > 0 && (
         <ContextMenu
           x={menuOpen.x}

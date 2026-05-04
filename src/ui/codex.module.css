@@ -70,6 +70,43 @@
   background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
 }
 
+/* Wrapper around <Link> note row + the hover linkages icon, so they sit on
+   the same line and the icon overlays the right edge of the row. */
+.noteRowWrap {
+  position: relative;
+}
+
+.noteRowWrap .noteRow {
+  padding-right: 1.6rem;
+}
+
+.noteRowLinkagesIcon {
+  position: absolute;
+  right: 0.3rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.3rem;
+  height: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease;
+  cursor: pointer;
+}
+
+.noteRowWrap:hover .noteRowLinkagesIcon {
+  opacity: 0.65;
+}
+
+.noteRowLinkagesIcon:hover {
+  opacity: 1 !important;
+  background: rgba(96, 165, 250, 0.2);
+}
+
 .noteRowActive {
   background: var(--accent-subtle, rgba(120, 200, 255, 0.12));
   font-weight: 600;
