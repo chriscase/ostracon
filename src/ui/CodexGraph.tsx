@@ -96,9 +96,11 @@ const FOLDER_PALETTE = [
   '#facc15', // yellow
 ];
 
-// Supernode color — a distinct, brighter shade so the folder-overview view
-// reads as "these are categories, not notes."
-const SUPERNODE_COLOR = '#93c5fd';
+// Fallback supernode color used only if a supernode somehow shows up without
+// a matching folder palette entry. Real supernodes use the same folder palette
+// as their notes (so the folder-overview reads as a true legend / preview of
+// what each folder will look like when drilled into).
+const SUPERNODE_FALLBACK = '#93c5fd';
 
 export default function CodexGraph({ scope }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
@@ -168,7 +170,8 @@ export default function CodexGraph({ scope }: Props) {
     };
   }, [scope]);
 
-  // Stable folder → palette index map.
+  // Stable folder → palette index map. Supernodes have id === folder, so
+  // the supernode palette lookup hits the same map.
   const folderColorMap = useMemo(() => {
     if (!data) return new Map<string, string>();
     const folders = Array.from(new Set(data.nodes.map((n) => n.folder))).sort();
@@ -200,16 +203,31 @@ export default function CodexGraph({ scope }: Props) {
     return map;
   }, [data]);
 
-  // For folder subgraphs, pre-position notes in a golden-angle spiral with
-  // radius = 1 - pageRank so hubs end up central. The force simulation will
-  // fine-tune from there.
+  // Pre-position nodes so the simulation starts from a sensible layout instead
+  // of all-near-origin. For supernodes (folder overview): even circle around
+  // origin so high cross-folder link counts can't collapse everything to the
+  // centroid. For folder subgraphs: golden-angle spiral with radius = 1 -
+  // pageRank so hubs end up central.
   const positionedNodes = useMemo(() => {
     if (!data) return [];
-    if (!data.scope) return data.nodes; // Supernodes use default force layout.
+    const r = Math.min(size.width, size.height) / 2 - 80;
+    if (!data.scope) {
+      // Supernode view: circle, sorted by noteCount so big folders are
+      // adjacent (less wraparound for cross-folder links).
+      const sorted = [...data.nodes].sort(
+        (a, b) => (b.noteCount ?? 0) - (a.noteCount ?? 0),
+      );
+      const n = sorted.length;
+      return sorted.map((node, i) => ({
+        ...node,
+        x: Math.cos((i / n) * 2 * Math.PI) * r * 0.8,
+        y: Math.sin((i / n) * 2 * Math.PI) * r * 0.8,
+      }));
+    }
+    // Folder-scope view.
     const sorted = [...data.nodes].sort((a, b) => b.pageRank - a.pageRank);
     const maxRank = Math.max(1e-9, ...sorted.map((n) => n.pageRank));
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const r = Math.min(size.width, size.height) / 2 - 80;
     return sorted.map((n, i) => ({
       ...n,
       x: Math.cos(i * goldenAngle) * (1 - n.pageRank / maxRank) * r,
@@ -224,30 +242,44 @@ export default function CodexGraph({ scope }: Props) {
   // new dep — react-force-graph-2d already wires those up internally.
   useEffect(() => {
     const fg = fgRef.current as
-      | { d3Force?: (name: string, force?: unknown) => unknown; d3ReheatSimulation?: () => void }
+      | {
+          d3Force?: (name: string, force?: unknown) => unknown;
+          d3ReheatSimulation?: () => void;
+          zoomToFit?: (ms?: number, padding?: number) => unknown;
+        }
       | null;
     if (!fg || !data) return;
     const linkForce = fg.d3Force?.('link') as
       | { distance: (n: number) => unknown; strength: (n: number) => unknown }
       | undefined;
     if (linkForce) {
-      // Supernode view: very wide spacing (only ~13 nodes, lots of canvas).
-      // Folder subgraph: tighter, but still wider than the library default.
-      const baseDist = data.scope ? 80 : 180;
+      // Supernode view: HUGE spacing — only ~15 nodes but very high cross-link
+      // density (avg ~7 links/node), so weaker links would collapse everything
+      // to centroid. Folder subgraph: tighter but still wider than default.
+      const baseDist = data.scope ? 90 : 320;
       linkForce.distance(baseDist);
-      linkForce.strength(0.4);
+      // Weak link strength = repulsion wins. We want spread, not tight clusters.
+      linkForce.strength(data.scope ? 0.25 : 0.05);
     }
     const chargeForce = fg.d3Force?.('charge') as
       | { strength: (n: number) => unknown; distanceMax?: (n: number) => unknown }
       | undefined;
     if (chargeForce) {
-      // Negative = repulsion. Bigger negative = more space between nodes.
-      chargeForce.strength(data.scope ? -250 : -500);
+      // Negative = repulsion. Big negative = lots of space between nodes.
+      // Supernode view needs MUCH more — 15 highly-connected nodes pile up.
+      chargeForce.strength(data.scope ? -350 : -2400);
       // Cap effective distance so far-away nodes don't slow the simulation.
-      chargeForce.distanceMax?.(data.scope ? 500 : 800);
+      chargeForce.distanceMax?.(data.scope ? 600 : 2000);
     }
     // Reheat so the new params take effect on already-positioned data.
     fg.d3ReheatSimulation?.();
+    // After the simulation has had time to settle, zoom to fit the whole
+    // graph. Without this the camera defaults are usually too tight or too
+    // loose for the new layout.
+    const zoomTimer = setTimeout(() => {
+      fg.zoomToFit?.(800, 80);
+    }, 1500);
+    return () => clearTimeout(zoomTimer);
   }, [data]);
 
   // Dim/highlight rules — node/link visibility for filter, alpha for hover.
@@ -443,9 +475,11 @@ export default function CodexGraph({ scope }: Props) {
             const radius = nodeRadius(n);
             const hot = isHotForHover(n.id);
             const baseAlpha = hot ? 1 : 0.18;
-            const color = n.kind === 'SUPERNODE'
-              ? SUPERNODE_COLOR
-              : (folderColorMap.get(n.folder) ?? '#9aa3b2');
+            // Supernodes have id === folder per the resolver, so the same
+            // folderColorMap drives both supernode + note coloring.
+            const color =
+              folderColorMap.get(n.folder) ??
+              (n.kind === 'SUPERNODE' ? SUPERNODE_FALLBACK : '#9aa3b2');
 
             // Glow for hover-target / hover-neighbors.
             if (hoveredId && hot && globalScale > 0.4) {
@@ -554,10 +588,12 @@ export default function CodexGraph({ scope }: Props) {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function nodeRadius(n: CodexGraphNode): number {
-  // Mirrors the legacy `nodeVal` heuristic but as a real radius (not the
-  // sqrt-applied area react-force-graph uses internally). Tuned so supernodes
-  // dominate visually and per-folder note-radii spread enough to read.
-  if (n.kind === 'SUPERNODE') return Math.max(10, Math.sqrt((n.noteCount ?? 1) * 5));
+  // Tuned so supernode size variance reads (a 90-note folder vs a 2-note one
+  // should be obvious) and per-folder note-radii spread enough to be useful.
+  if (n.kind === 'SUPERNODE') {
+    const count = n.noteCount ?? 1;
+    return Math.max(14, Math.min(50, Math.sqrt(count) * 3.5));
+  }
   return Math.max(3.5, Math.sqrt(n.pageRank * 4500));
 }
 
