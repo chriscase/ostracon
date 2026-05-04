@@ -352,6 +352,15 @@ export default function CodexEditor({
           <span className={styles.notePath} style={{ marginLeft: '0.5rem' }}>{path}</span>
         </div>
         <div className={styles.editorActions}>
+          {baseSha !== null && (
+            <a
+              href={`/admin/codex/graph/note/${encodeURIComponent(path)}`}
+              className={styles.btnSecondary}
+              title="Show this note's link graph (across all folders)"
+            >
+              🕸 Linkages
+            </a>
+          )}
           <button type="button" onClick={onCancel} className={styles.btnSecondary}>
             Cancel
           </button>

@@ -46,6 +46,28 @@ const TOP_NOTES_QUERY = `
   }
 `;
 
+const NOTE_NEIGHBORHOOD_QUERY = `
+  query VaultNoteNeighborhood($notePath: String!, $depth: Int) {
+    vaultNoteNeighborhood(notePath: $notePath, depth: $depth) {
+      scope
+      nodes {
+        id
+        label
+        kind
+        folder
+        pageRank
+        degree
+        distance
+      }
+      edges {
+        from
+        to
+        weight
+      }
+    }
+  }
+`;
+
 interface CodexGraphNode {
   id: string;
   label: string;
@@ -54,6 +76,8 @@ interface CodexGraphNode {
   pageRank: number;
   degree: number;
   noteCount?: number | null;
+  /** Hop count from the focused note (only present in noteFocus mode). */
+  distance?: number | null;
 }
 
 interface CodexGraphEdge {
@@ -70,6 +94,15 @@ interface CodexGraphPayload {
 
 interface Props {
   scope?: string;
+  /**
+   * If set, switches the component into "note linkages" mode: ignores
+   * `scope`, runs vaultNoteNeighborhood instead of vaultGraph, and renders
+   * the focused note + cross-folder neighbors with the focused note as
+   * the visual anchor.
+   */
+  noteFocus?: string;
+  /** Hop depth for noteFocus mode. Default 2. Server caps at 5. */
+  noteFocusDepth?: number;
 }
 
 // Curated palette — saturated enough to read on a dark canvas, harmonious
@@ -94,7 +127,7 @@ const DIM_EDGE = 'rgba(120, 130, 150, 0.05)';
 const HOT_EDGE = 'rgba(180, 200, 230, 0.55)';
 const DEFAULT_EDGE = 'rgba(150, 160, 180, 0.18)';
 
-export default function CodexGraph({ scope }: Props) {
+export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
   const { useRouter: useNavRouter } = useCodexNavigation();
   const router = useNavRouter();
@@ -146,14 +179,27 @@ export default function CodexGraph({ scope }: Props) {
     setFocusedLabel('');
     (async () => {
       try {
-        const { data: payload, errors } = await graphqlRequest<{
-          vaultGraph: CodexGraphPayload;
-        }>(GRAPH_QUERY, { scope: scope ?? null });
-        if (cancelled) return;
-        if (errors?.length) {
-          setError(errors.map((e) => e.message).join('; '));
+        if (noteFocus) {
+          // Cross-folder note-centric view: BFS in the full edge graph.
+          const { data: payload, errors } = await graphqlRequest<{
+            vaultNoteNeighborhood: CodexGraphPayload;
+          }>(NOTE_NEIGHBORHOOD_QUERY, { notePath: noteFocus, depth: noteFocusDepth });
+          if (cancelled) return;
+          if (errors?.length) {
+            setError(errors.map((e) => e.message).join('; '));
+          } else {
+            setRawData(payload?.vaultNoteNeighborhood ?? null);
+          }
         } else {
-          setRawData(payload?.vaultGraph ?? null);
+          const { data: payload, errors } = await graphqlRequest<{
+            vaultGraph: CodexGraphPayload;
+          }>(GRAPH_QUERY, { scope: scope ?? null });
+          if (cancelled) return;
+          if (errors?.length) {
+            setError(errors.map((e) => e.message).join('; '));
+          } else {
+            setRawData(payload?.vaultGraph ?? null);
+          }
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load graph');
@@ -162,7 +208,7 @@ export default function CodexGraph({ scope }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [scope]);
+  }, [scope, noteFocus, noteFocusDepth]);
 
   // The supernode resolver groups every file by `folder`, including top-level
   // files (Home.md, README.md, CLAUDE.md) which end up as 1-note "fake folders"
@@ -170,14 +216,16 @@ export default function CodexGraph({ scope }: Props) {
   const looksLikeFile = useCallback((s: string): boolean => /\.\w+$/.test(s), []);
   const data = useMemo<CodexGraphPayload | null>(() => {
     if (!rawData) return null;
-    if (rawData.scope) return rawData;
+    // In noteFocus mode the nodes ARE files (notes) — filtering by extension
+    // would erase everything. Same for folder-scope.
+    if (rawData.scope || noteFocus) return rawData;
     const visibleNodes = rawData.nodes.filter((n) => !looksLikeFile(n.id));
     const visibleIds = new Set(visibleNodes.map((n) => n.id));
     const visibleEdges = rawData.edges.filter(
       (e) => visibleIds.has(e.from) && visibleIds.has(e.to),
     );
     return { ...rawData, nodes: visibleNodes, edges: visibleEdges };
-  }, [rawData, looksLikeFile]);
+  }, [rawData, looksLikeFile, noteFocus]);
 
   // Stable folder → palette index map.
   const folderColorMap = useMemo(() => {
@@ -227,22 +275,43 @@ export default function CodexGraph({ scope }: Props) {
       const n = data.nodes.length;
       data.nodes.forEach((node, i) => {
         const fillColor = folderColorMap.get(node.folder) ?? '#9aa3b2';
+        // In noteFocus mode the focused note is the anchor — at center,
+        // bigger, with a stronger border. Other notes scale down with hop
+        // distance so the visual hierarchy reads "this is the subject, these
+        // are its neighbors, these are second-degree".
+        const isFocusedNote = noteFocus && node.id === noteFocus;
+        const baseSize = nodeSize(node);
+        const distance = node.distance ?? 0;
+        const sizedNode = noteFocus
+          ? isFocusedNote
+            ? Math.max(22, baseSize * 1.8)
+            : Math.max(baseSize * (1 - 0.2 * distance), 4)
+          : baseSize;
         graph.addNode(node.id, {
-          // Initial position on a circle so FA2 has a sane starting layout.
-          x: Math.cos((i / n) * 2 * Math.PI),
-          y: Math.sin((i / n) * 2 * Math.PI),
-          size: nodeSize(node),
+          // Initial position. In noteFocus mode the focused note sits at
+          // origin and others spiral out by distance — gives FA2 a layout
+          // that already reads "this is central."
+          x: noteFocus
+            ? isFocusedNote
+              ? 0
+              : Math.cos((i / n) * 2 * Math.PI) * (1 + distance * 0.5)
+            : Math.cos((i / n) * 2 * Math.PI),
+          y: noteFocus
+            ? isFocusedNote
+              ? 0
+              : Math.sin((i / n) * 2 * Math.PI) * (1 + distance * 0.5)
+            : Math.sin((i / n) * 2 * Math.PI),
+          size: sizedNode,
           color: fillColor,
-          // Slightly darker fill color = subtle border that gives nodes depth
-          // without looking outlined.
-          borderColor: shadeHex(fillColor, -0.35),
+          borderColor: isFocusedNote ? '#ffffff' : shadeHex(fillColor, -0.35),
           type: 'border',
           label: node.label,
-          // Custom attrs preserved for reducer logic + click handler.
           kind: node.kind,
           folder: node.folder,
           pageRank: node.pageRank,
           noteCount: node.noteCount,
+          distance,
+          isFocusedNote: Boolean(isFocusedNote),
         });
       });
 
@@ -321,9 +390,18 @@ export default function CodexGraph({ scope }: Props) {
           event: { original: MouseEvent | TouchEvent };
         }) => {
           const a = graph.getNodeAttributes(node) as { kind: string; label: string };
-          // shiftKey only exists on MouseEvent (touch can't shift+click anyway).
           const isMouse = 'shiftKey' in event.original;
-          if (isMouse && (event.original as MouseEvent).shiftKey) {
+          const shift = isMouse && (event.original as MouseEvent).shiftKey;
+          // In noteFocus mode, shift+click re-pivots the linkages view onto
+          // the clicked note — instant drill-deeper without going back through
+          // the editor.
+          if (noteFocus && shift) {
+            router.push(`/admin/codex/graph/note/${encodeURIComponent(node)}`);
+            return;
+          }
+          // Outside noteFocus mode, shift+click enters the in-view local
+          // BFS focus (existing behavior).
+          if (shift) {
             setFocusedId(node);
             setFocusedLabel(a.label);
             return;
@@ -460,14 +538,37 @@ export default function CodexGraph({ scope }: Props) {
               Reset
             </button>
           )}
-          <span className={styles.graphHint} title="Shift+click any node to focus on its neighborhood">
-            ⇧ click → local view
+          <span
+            className={styles.graphHint}
+            title={
+              noteFocus
+                ? 'Shift+click any note to pivot the linkages view onto that note'
+                : 'Shift+click any node to focus on its neighborhood'
+            }
+          >
+            {noteFocus ? '⇧ click → re-pivot' : '⇧ click → local view'}
           </span>
         </div>
       </div>
 
       <div className={styles.graphHeader}>
-        {data.scope ? (
+        {noteFocus ? (
+          <>
+            <button
+              type="button"
+              className={styles.graphBackButton}
+              onClick={() => router.push('/admin/codex/graph')}
+            >
+              ← All folders
+            </button>
+            <span className={styles.graphScopeLabel}>
+              Linkages from: {data.nodes.find((n) => n.id === noteFocus)?.label ?? noteFocus}
+            </span>
+            <span className={styles.graphMeta}>
+              {data.nodes.length} connected · {data.edges.length} links · depth {noteFocusDepth}
+            </span>
+          </>
+        ) : data.scope ? (
           <>
             <button
               type="button"
