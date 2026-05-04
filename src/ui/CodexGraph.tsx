@@ -245,10 +245,16 @@ export default function CodexGraph({ scope }: Props) {
 
       const sigma = new Sigma(graph, containerRef.current, {
         renderEdgeLabels: false,
-        labelSize: 12,
-        labelWeight: '500',
-        labelDensity: 0.5,
-        labelGridCellSize: 80,
+        labelSize: 13,
+        labelWeight: '600',
+        // Higher density = more labels visible at once. labelGridCellSize
+        // shrinks the spacing requirement so labels can sit closer to each
+        // other without being culled.
+        labelDensity: 1,
+        labelGridCellSize: 50,
+        // Render labels for all nodes regardless of size (default threshold
+        // hides labels for nodes smaller than ~6px which kills note labels).
+        labelRenderedSizeThreshold: 0,
         labelColor: { color: '#ffffff' },
         labelFont: 'system-ui, -apple-system, sans-serif',
         defaultNodeColor: '#9aa3b2',
@@ -449,10 +455,11 @@ function makeNodeReducer(stateRef: ReducerStateRef) {
       return { ...attrs, forceLabel: true, zIndex: 2 };
     }
 
-    // No hover, no filters → at supernode level we suppress the canvas label
-    // (the chip row at the top is the legend) so the canvas stays clean.
+    // Default: keep labels visible. Sigma's labelDensity / labelGridCellSize
+    // settings handle collision automatically; at supernode level there are
+    // only ~12 nodes so all fit comfortably.
     if (attrs.kind === 'SUPERNODE') {
-      return { ...attrs, label: '' };
+      return { ...attrs, forceLabel: true };
     }
     return attrs;
   };
