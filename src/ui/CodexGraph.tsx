@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useCodexGraphqlRequest, useCodexNavigation } from './CodexAdapters';
 import { noteHref } from './CodexTree';
+import CodexNotePreviewPane from './CodexNotePreviewPane';
 import styles from './codex.module.css';
+
+const PANE_WIDTH_KEY = 'ostracon-graph-pane-width';
+const PANE_WIDTH_MIN = 280;
+const PANE_WIDTH_MAX = 900;
+const PANE_WIDTH_DEFAULT = 440;
 
 // Sigma + graphology + ForceAtlas2 are loaded dynamically inside the mount
 // effect — they're WebGL/canvas dependent and can't run server-side. The
@@ -137,6 +143,29 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [folderFilter, setFolderFilter] = useState<Set<string>>(new Set());
+  // Side preview pane: when set, the note at this path is rendered in a
+  // resizable pane on the right. Click any note (in graph or list) to load it
+  // here; click × in the pane header to close.
+  const [viewingNotePath, setViewingNotePath] = useState<string | null>(null);
+  const [paneWidth, setPaneWidth] = useState<number>(PANE_WIDTH_DEFAULT);
+
+  // Hydrate paneWidth from localStorage on mount (avoids SSR mismatch).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(PANE_WIDTH_KEY);
+    if (stored) {
+      const w = parseInt(stored, 10);
+      if (!Number.isNaN(w)) {
+        setPaneWidth(Math.max(PANE_WIDTH_MIN, Math.min(PANE_WIDTH_MAX, w)));
+      }
+    }
+  }, []);
+
+  // Persist width changes (debounced via the natural rAF batching of state).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(PANE_WIDTH_KEY, String(paneWidth));
+  }, [paneWidth]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<unknown>(null);
@@ -379,30 +408,17 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
 
       // Click navigation:
       //   • Click a SUPERNODE (folder bubble) → drill into that folder's notes
-      //   • Click a NOTE → jump to its cross-folder linkages page
-      // No special key combos. The previous shift+click "in-view local filter"
-      // mode was confusing because in tightly-connected subgraphs (e.g. all
-      // notes in one folder) it visibly did nothing — every node was already
-      // in N hops. Replaced with this simpler model: clicking a note always
-      // takes you to the FULL cross-folder neighborhood for that note, which
-      // is qualitatively different from any current view and always informative.
+      //   • Click a NOTE → open it in the side preview pane (read its content
+      //     without leaving the graph). The pane has buttons for the deeper
+      //     actions: "🕸 Linkages" (jump to that note's full linkage graph)
+      //     and "✎ Edit" (open in editor).
       sigma.on('clickNode', ({ node }: { node: string }) => {
         const a = graph.getNodeAttributes(node) as { kind: string };
         if (a.kind === 'SUPERNODE') {
           router.push(`/admin/codex/graph?scope=${encodeURIComponent(node)}`);
           return;
         }
-        // Note → linkages page. Strip .md + segment-encode to dodge the
-        // next-intl middleware's "any URL containing a dot is a static asset"
-        // rule.
-        const url =
-          '/admin/codex/graph/note/' +
-          node
-            .replace(/\.md$/i, '')
-            .split(/[\\/]/g)
-            .map((seg) => encodeURIComponent(seg))
-            .join('/');
-        router.push(url);
+        setViewingNotePath(node);
       });
 
       // Hover state — bubble up to React, the reducer effect picks it up.
@@ -617,7 +633,7 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
         )}
       </div>
 
-      <div className={noteFocus ? styles.graphBodySplit : styles.graphBody}>
+      <div className={(noteFocus || viewingNotePath) ? styles.graphBodySplit : styles.graphBody}>
         {noteFocus && (
           <aside className={styles.graphLinkagesPanel}>
             {directConnections.length > 0 && (
@@ -631,14 +647,14 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
                     <li
                       key={n.id}
                       className={
-                        hoveredId === n.id
+                        hoveredId === n.id || viewingNotePath === n.id
                           ? styles.graphLinkagesItemActive
                           : styles.graphLinkagesItem
                       }
                       onMouseEnter={() => setHoveredId(n.id)}
                       onMouseLeave={() => setHoveredId(null)}
-                      onClick={() => router.push(linkagesUrl(n.id))}
-                      title={`Pivot linkages view onto ${n.label}`}
+                      onClick={() => setViewingNotePath(n.id)}
+                      title={`View ${n.label}`}
                     >
                       <span
                         className={styles.graphLinkagesItemDot}
@@ -648,6 +664,18 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
                       <span className={styles.graphLinkagesItemFolder}>
                         {n.folder.replace(/^\d+\s*-\s*/, '')}
                       </span>
+                      <button
+                        type="button"
+                        className={styles.graphLinkagesItemPivot}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          router.push(linkagesUrl(n.id));
+                        }}
+                        title="Pivot the linkages view onto this note"
+                        aria-label="Pivot linkages"
+                      >
+                        🕸
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -665,14 +693,14 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
                     <li
                       key={n.id}
                       className={
-                        hoveredId === n.id
+                        hoveredId === n.id || viewingNotePath === n.id
                           ? styles.graphLinkagesItemActive
                           : styles.graphLinkagesItem
                       }
                       onMouseEnter={() => setHoveredId(n.id)}
                       onMouseLeave={() => setHoveredId(null)}
-                      onClick={() => router.push(linkagesUrl(n.id))}
-                      title={`Pivot linkages view onto ${n.label}`}
+                      onClick={() => setViewingNotePath(n.id)}
+                      title={`View ${n.label}`}
                     >
                       <span
                         className={styles.graphLinkagesItemDot}
@@ -682,6 +710,18 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
                       <span className={styles.graphLinkagesItemFolderSubtle}>
                         {n.folder.replace(/^\d+\s*-\s*/, '')} · {n.distance ?? 0} hops
                       </span>
+                      <button
+                        type="button"
+                        className={styles.graphLinkagesItemPivot}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          router.push(linkagesUrl(n.id));
+                        }}
+                        title="Pivot the linkages view onto this note"
+                        aria-label="Pivot linkages"
+                      >
+                        🕸
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -696,9 +736,56 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
           </aside>
         )}
         <div ref={containerRef} className={styles.graphCanvas} />
+        {viewingNotePath && (
+          <>
+            <div
+              className={styles.notePreviewResizeHandle}
+              onMouseDown={(e) => startResize(e, paneWidth, setPaneWidth)}
+              onDoubleClick={() => setPaneWidth(PANE_WIDTH_DEFAULT)}
+              title="Drag to resize · double-click to reset"
+              role="separator"
+              aria-orientation="vertical"
+            />
+            <div className={styles.notePreviewPaneWrap} style={{ width: `${paneWidth}px` }}>
+              <CodexNotePreviewPane
+                notePath={viewingNotePath}
+                onClose={() => setViewingNotePath(null)}
+                onOpenLinkages={(p) => router.push(linkagesUrl(p))}
+                onEdit={(p) => router.push(noteHref(p))}
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
+}
+
+// Drag-to-resize handler for the side pane. The pane lives on the right, so
+// dragging left grows it (positive delta = wider pane).
+function startResize(
+  e: React.MouseEvent,
+  startWidth: number,
+  setWidth: (w: number) => void,
+) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const onMove = (ev: MouseEvent) => {
+    const dx = startX - ev.clientX;
+    const next = Math.max(PANE_WIDTH_MIN, Math.min(PANE_WIDTH_MAX, startWidth + dx));
+    setWidth(next);
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  // Prevent text selection while dragging.
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'col-resize';
 }
 
 // Sort comparator: folder ascending, then label ascending. Used to group
