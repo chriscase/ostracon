@@ -354,7 +354,18 @@ export default function CodexEditor({
         <div className={styles.editorActions}>
           {baseSha !== null && (
             <a
-              href={`/admin/codex/graph/note/${encodeURIComponent(path)}`}
+              href={
+                // next-intl middleware excludes any URL containing `.` as a
+                // static-asset, so we strip the .md extension and segment-
+                // encode (mirrors noteHref). The page route re-appends .md
+                // server-side from the joined segments.
+                '/admin/codex/graph/note/' +
+                path
+                  .replace(/\.md$/i, '')
+                  .split(/[\\/]/g)
+                  .map((seg) => encodeURIComponent(seg))
+                  .join('/')
+              }
               className={styles.btnSecondary}
               title="Show this note's link graph (across all folders)"
             >

@@ -394,9 +394,17 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
           const shift = isMouse && (event.original as MouseEvent).shiftKey;
           // In noteFocus mode, shift+click re-pivots the linkages view onto
           // the clicked note — instant drill-deeper without going back through
-          // the editor.
+          // the editor. Strip .md + segment-encode to dodge the next-intl
+          // middleware's "any URL containing a dot is a static asset" rule.
           if (noteFocus && shift) {
-            router.push(`/admin/codex/graph/note/${encodeURIComponent(node)}`);
+            const url =
+              '/admin/codex/graph/note/' +
+              node
+                .replace(/\.md$/i, '')
+                .split(/[\\/]/g)
+                .map((seg) => encodeURIComponent(seg))
+                .join('/');
+            router.push(url);
             return;
           }
           // Outside noteFocus mode, shift+click enters the in-view local
