@@ -555,9 +555,23 @@
   flex: 1;
   min-height: 400px;
   position: relative;
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
+  /* Subtle radial vignette + dark base — gives the canvas depth so it doesn't
+     read as a flat rectangle. The center of the graph reads brighter than
+     the edges, which makes any focused content feel "lifted". */
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(40, 50, 70, 0.35) 0%,
+      rgba(15, 18, 28, 0.85) 70%,
+      rgba(8, 10, 16, 1) 100%
+    ),
+    #0b0e16;
+  border-radius: 6px;
   overflow: hidden;
+  /* Inset shadow for a recessed-into-page feel. */
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .mobileGraphFallback {

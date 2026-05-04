@@ -81,6 +81,8 @@
   },
   "devDependencies": {
     "@prisma/client": "^5.7.1",
+    "@sigma/edge-curve": "^3.1.0",
+    "@sigma/node-border": "^3.0.0",
     "@types/node": "^20.10.5",
     "@types/react": "^18.2.45",
     "@types/react-dom": "^18.2.18",

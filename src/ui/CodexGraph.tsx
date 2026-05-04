@@ -184,23 +184,49 @@ export default function CodexGraph({ scope }: Props) {
     let sigmaInstance: { kill: () => void } | null = null;
 
     (async () => {
-      const [{ default: Sigma }, { default: Graph }, { default: forceAtlas2 }] =
-        await Promise.all([
-          import('sigma'),
-          import('graphology'),
-          import('graphology-layout-forceatlas2'),
-        ]);
+      const [
+        { default: Sigma },
+        { default: Graph },
+        { default: forceAtlas2 },
+        edgeCurveMod,
+        nodeBorderMod,
+      ] = await Promise.all([
+        import('sigma'),
+        import('graphology'),
+        import('graphology-layout-forceatlas2'),
+        import('@sigma/edge-curve'),
+        import('@sigma/node-border'),
+      ]);
       if (killed || !containerRef.current) return;
+
+      const EdgeCurveProgram = edgeCurveMod.default;
+      const { createNodeBorderProgram } = nodeBorderMod;
+      // Bordered node program: thin darker outline around a colored fill.
+      // Adds depth without writing custom GLSL shaders.
+      const NodeBorderProgram = createNodeBorderProgram({
+        borders: [
+          {
+            size: { value: 0.12, mode: 'relative' },
+            color: { attribute: 'borderColor', defaultValue: '#000000' },
+          },
+          { size: { fill: true }, color: { attribute: 'color' } },
+        ],
+      });
 
       const graph = new Graph();
       const n = data.nodes.length;
       data.nodes.forEach((node, i) => {
+        const fillColor = folderColorMap.get(node.folder) ?? '#9aa3b2';
         graph.addNode(node.id, {
           // Initial position on a circle so FA2 has a sane starting layout.
           x: Math.cos((i / n) * 2 * Math.PI),
           y: Math.sin((i / n) * 2 * Math.PI),
           size: nodeSize(node),
-          color: folderColorMap.get(node.folder) ?? '#9aa3b2',
+          color: fillColor,
+          // Slightly darker fill color = subtle border that gives nodes depth
+          // without looking outlined.
+          borderColor: shadeHex(fillColor, -0.35),
+          type: 'border',
           label: node.label,
           // Custom attrs preserved for reducer logic + click handler.
           kind: node.kind,
@@ -218,9 +244,11 @@ export default function CodexGraph({ scope }: Props) {
           e.from !== e.to
         ) {
           graph.addEdge(e.from, e.to, {
-            size: Math.max(0.5, Math.log1p(e.weight) * 1.2),
+            type: 'curve',
+            size: Math.max(0.5, Math.log1p(e.weight) * 1.4),
             color: DEFAULT_EDGE,
             weight: e.weight,
+            curvature: 0.25,
           });
         }
       });
@@ -246,19 +274,22 @@ export default function CodexGraph({ scope }: Props) {
       const sigma = new Sigma(graph, containerRef.current, {
         renderEdgeLabels: false,
         labelSize: 13,
-        labelWeight: '600',
-        // Higher density = more labels visible at once. labelGridCellSize
-        // shrinks the spacing requirement so labels can sit closer to each
-        // other without being culled.
+        labelWeight: '500',
         labelDensity: 1,
         labelGridCellSize: 50,
-        // Render labels for all nodes regardless of size (default threshold
-        // hides labels for nodes smaller than ~6px which kills note labels).
         labelRenderedSizeThreshold: 0,
-        labelColor: { color: '#ffffff' },
-        labelFont: 'system-ui, -apple-system, sans-serif',
+        labelColor: { color: '#e6e9ef' },
+        labelFont: 'Inter, system-ui, -apple-system, sans-serif',
         defaultNodeColor: '#9aa3b2',
         defaultEdgeColor: DEFAULT_EDGE,
+        defaultNodeType: 'border',
+        defaultEdgeType: 'curve',
+        nodeProgramClasses: {
+          border: NodeBorderProgram,
+        },
+        edgeProgramClasses: {
+          curve: EdgeCurveProgram,
+        },
         nodeReducer: (node, attrs) => makeNodeReducer(reducerStateRef)(node, attrs),
         edgeReducer: (edge, attrs) =>
           makeEdgeReducer(reducerStateRef, graph)(edge, attrs),
@@ -503,6 +534,17 @@ function makeEdgeReducer(
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+// Lighten / darken a hex color by amt in [-1, 1]. Negative = darker.
+function shadeHex(hex: string, amt: number): string {
+  const h = hex.startsWith('#') ? hex.slice(1) : hex;
+  const exp = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const r = parseInt(exp.slice(0, 2), 16);
+  const g = parseInt(exp.slice(2, 4), 16);
+  const b = parseInt(exp.slice(4, 6), 16);
+  const f = (x: number) => Math.max(0, Math.min(255, Math.round(x + 255 * amt)));
+  return `#${[f(r), f(g), f(b)].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
 
 function nodeSize(n: CodexGraphNode): number {
   // Sigma's size units are roughly screen-pixels at default zoom — much
