@@ -31,6 +31,8 @@
   },
   "peerDependencies": {
     "@prisma/client": ">=5",
+    "@sigma/edge-curve": ">=3",
+    "@sigma/node-border": ">=3",
     "@uiw/react-md-editor": ">=4",
     "graphology": ">=0.26",
     "graphology-layout-forceatlas2": ">=0.10",
@@ -67,6 +69,12 @@
       "optional": true
     },
     "graphology-layout-forceatlas2": {
+      "optional": true
+    },
+    "@sigma/edge-curve": {
+      "optional": true
+    },
+    "@sigma/node-border": {
       "optional": true
     },
     "rehype-autolink-headings": {
