@@ -106,7 +106,7 @@ export default function CodexGraph({ scope }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
   const { useRouter: useNavRouter } = useCodexNavigation();
   const router = useNavRouter();
-  const [data, setData] = useState<CodexGraphPayload | null>(null);
+  const [rawData, setRawData] = useState<CodexGraphPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [size, setSize] = useState<{ width: number; height: number }>({
     width: 800,
@@ -145,7 +145,7 @@ export default function CodexGraph({ scope }: Props) {
   // Load graph data when scope changes.
   useEffect(() => {
     let cancelled = false;
-    setData(null);
+    setRawData(null);
     setError(null);
     setHoveredId(null);
     setSearch('');
@@ -159,7 +159,7 @@ export default function CodexGraph({ scope }: Props) {
         if (errors?.length) {
           setError(errors.map((e) => e.message).join('; '));
         } else {
-          setData(payload?.vaultGraph ?? null);
+          setRawData(payload?.vaultGraph ?? null);
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load graph');
@@ -169,6 +169,23 @@ export default function CodexGraph({ scope }: Props) {
       cancelled = true;
     };
   }, [scope]);
+
+  // The supernode resolver groups every file by its `folder`, including
+  // top-level files (Home.md, README.md, CLAUDE.md) which end up as
+  // 1-note "fake folders" named after the file. Filter those out — they're
+  // visual noise that pollutes the legend chips and the canvas. Real folders
+  // never have a file-extension suffix.
+  const looksLikeFile = useCallback((s: string): boolean => /\.\w+$/.test(s), []);
+  const data = useMemo<CodexGraphPayload | null>(() => {
+    if (!rawData) return null;
+    if (rawData.scope) return rawData; // Folder-scope: notes ARE files; don't filter.
+    const visibleNodes = rawData.nodes.filter((n) => !looksLikeFile(n.id));
+    const visibleIds = new Set(visibleNodes.map((n) => n.id));
+    const visibleEdges = rawData.edges.filter(
+      (e) => visibleIds.has(e.from) && visibleIds.has(e.to),
+    );
+    return { ...rawData, nodes: visibleNodes, edges: visibleEdges };
+  }, [rawData, looksLikeFile]);
 
   // Stable folder → palette index map. Supernodes have id === folder, so
   // the supernode palette lookup hits the same map.
@@ -505,14 +522,17 @@ export default function CodexGraph({ scope }: Props) {
             ctx.lineWidth = hoveredId === n.id ? 1.5 : 0.5;
             ctx.stroke();
 
-            // Label visibility — show if hovered/neighbor (always), or if this
-            // node's pageRank percentile is above the zoom-dependent threshold.
+            // Label visibility:
+            // - Supernode level: only show on hover (the chip row at the top
+            //   serves as the always-visible legend; canvas labels just pile
+            //   up on each other and create visual mush).
+            // - Note level: show if hovered/neighbor, or if this node's
+            //   pageRank percentile is above the zoom-dependent threshold.
             const pct = pageRankPercentile.get(n.id) ?? 0;
             const threshold = labelThreshold(globalScale);
-            const showLabel =
-              n.kind === 'SUPERNODE' ||
-              (hoveredId && hot) ||
-              pct >= threshold;
+            const showLabel = n.kind === 'SUPERNODE'
+              ? Boolean(hoveredId && hot)
+              : Boolean((hoveredId && hot) || pct >= threshold);
             if (!showLabel) return;
 
             const label = truncateLabel(n.label, n.kind === 'SUPERNODE' ? 30 : 22);
@@ -572,6 +592,41 @@ export default function CodexGraph({ scope }: Props) {
           d3AlphaDecay={0.02}
           d3VelocityDecay={0.35}
           warmupTicks={50}
+          onEngineTick={() => {
+            // Brute-force collision resolution. d3-force has forceCollide but
+            // adding it requires a new dep + peerDep dance; with at most ~50
+            // visible nodes this O(n^2) push-apart pass is cheap (~2500 ops
+            // per tick) and Just Works. Padding scales with node radii so the
+            // edge-of-circle gap stays visually consistent across sizes.
+            const nodes = positionedNodes as Array<
+              CodexGraphNode & { x?: number; y?: number; vx?: number; vy?: number }
+            >;
+            const PAD = 6;
+            for (let i = 0; i < nodes.length; i++) {
+              const a = nodes[i];
+              if (a.x === undefined || a.y === undefined) continue;
+              const ar = nodeRadius(a);
+              for (let j = i + 1; j < nodes.length; j++) {
+                const b = nodes[j];
+                if (b.x === undefined || b.y === undefined) continue;
+                const br = nodeRadius(b);
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const distSq = dx * dx + dy * dy;
+                const minDist = ar + br + PAD;
+                if (distSq < minDist * minDist && distSq > 0) {
+                  const dist = Math.sqrt(distSq);
+                  const overlap = (minDist - dist) / 2;
+                  const nx = dx / dist;
+                  const ny = dy / dist;
+                  a.x -= nx * overlap;
+                  a.y -= ny * overlap;
+                  b.x += nx * overlap;
+                  b.y += ny * overlap;
+                }
+              }
+            }
+          }}
           onNodeClick={(node: CodexGraphNode) => {
             if (node.kind === 'SUPERNODE') {
               router.push(`/admin/codex/graph?scope=${encodeURIComponent(node.id)}`);
@@ -588,11 +643,13 @@ export default function CodexGraph({ scope }: Props) {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function nodeRadius(n: CodexGraphNode): number {
-  // Tuned so supernode size variance reads (a 90-note folder vs a 2-note one
-  // should be obvious) and per-folder note-radii spread enough to be useful.
+  // Supernode sizes must allow ~12 nodes to coexist without overlap given the
+  // canvas height (~600px). Cap at 32px radius (64px diameter) so even big
+  // folders fit alongside smaller ones. Variance still reads via the sqrt
+  // scaling.
   if (n.kind === 'SUPERNODE') {
     const count = n.noteCount ?? 1;
-    return Math.max(14, Math.min(50, Math.sqrt(count) * 3.5));
+    return Math.max(12, Math.min(32, Math.sqrt(count) * 2.6));
   }
   return Math.max(3.5, Math.sqrt(n.pageRank * 4500));
 }
