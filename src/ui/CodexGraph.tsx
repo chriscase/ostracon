@@ -263,34 +263,42 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
 
       const graph = new Graph();
       const n = data.nodes.length;
+
+      // In noteFocus mode we use a CONCENTRIC layout (rings by hop distance,
+      // sorted by folder so same-folder neighbors cluster as arc-segments) and
+      // skip ForceAtlas2 entirely — FA2 is great for emergent structure but
+      // here we already know the right structure: focused note in the center,
+      // neighbors radiating out by hops. Skipping FA2 also avoids the
+      // hairball-on-load problem.
+      const concentricPositions = noteFocus
+        ? computeConcentricLayout(data.nodes, noteFocus)
+        : null;
+
       data.nodes.forEach((node, i) => {
         const fillColor = folderColorMap.get(node.folder) ?? '#9aa3b2';
-        // In noteFocus mode the focused note is the anchor — at center,
-        // bigger, with a stronger border. Other notes scale down with hop
-        // distance so the visual hierarchy reads "this is the subject, these
-        // are its neighbors, these are second-degree".
         const isFocusedNote = noteFocus && node.id === noteFocus;
         const baseSize = nodeSize(node);
         const distance = node.distance ?? 0;
         const sizedNode = noteFocus
           ? isFocusedNote
             ? Math.max(22, baseSize * 1.8)
-            : Math.max(baseSize * (1 - 0.2 * distance), 4)
+            : Math.max(baseSize * (1 - 0.2 * distance), 5)
           : baseSize;
+
+        // Position: concentric for noteFocus, circle initial for FA2.
+        let x: number, y: number;
+        if (concentricPositions) {
+          const pos = concentricPositions.get(node.id) ?? { x: 0, y: 0 };
+          x = pos.x;
+          y = pos.y;
+        } else {
+          x = Math.cos((i / n) * 2 * Math.PI);
+          y = Math.sin((i / n) * 2 * Math.PI);
+        }
+
         graph.addNode(node.id, {
-          // Initial position. In noteFocus mode the focused note sits at
-          // origin and others spiral out by distance — gives FA2 a layout
-          // that already reads "this is central."
-          x: noteFocus
-            ? isFocusedNote
-              ? 0
-              : Math.cos((i / n) * 2 * Math.PI) * (1 + distance * 0.5)
-            : Math.cos((i / n) * 2 * Math.PI),
-          y: noteFocus
-            ? isFocusedNote
-              ? 0
-              : Math.sin((i / n) * 2 * Math.PI) * (1 + distance * 0.5)
-            : Math.sin((i / n) * 2 * Math.PI),
+          x,
+          y,
           size: sizedNode,
           color: fillColor,
           borderColor: isFocusedNote ? '#ffffff' : shadeHex(fillColor, -0.35),
@@ -317,28 +325,29 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
             size: Math.max(0.5, Math.log1p(e.weight) * 1.4),
             color: DEFAULT_EDGE,
             weight: e.weight,
-            curvature: 0.25,
+            curvature: noteFocus ? 0.1 : 0.25,
           });
         }
       });
 
-      // ForceAtlas2 with linLogMode is the recipe for densely-connected
-      // categorical graphs (our supernode case). For folder subgraphs (less
-      // dense, more notes) we tune slightly differently.
-      forceAtlas2.assign(graph, {
-        iterations: data.scope ? 600 : 400,
-        settings: {
-          gravity: data.scope ? 0.3 : 1.2,
-          scalingRatio: data.scope ? 8 : 30,
-          strongGravityMode: false,
-          barnesHutOptimize: graph.order > 80,
-          linLogMode: true,
-          outboundAttractionDistribution: true,
-          adjustSizes: true,
-          edgeWeightInfluence: 1,
-          slowDown: 1,
-        },
-      });
+      // FA2 only for non-focus modes (supernode + folder-scope). NoteFocus
+      // uses the pre-computed concentric layout above.
+      if (!noteFocus) {
+        forceAtlas2.assign(graph, {
+          iterations: data.scope ? 600 : 400,
+          settings: {
+            gravity: data.scope ? 0.3 : 1.2,
+            scalingRatio: data.scope ? 8 : 30,
+            strongGravityMode: false,
+            barnesHutOptimize: graph.order > 80,
+            linLogMode: true,
+            outboundAttractionDistribution: true,
+            adjustSizes: true,
+            edgeWeightInfluence: 1,
+            slowDown: 1,
+          },
+        });
+      }
 
       const sigma = new Sigma(graph, containerRef.current, {
         renderEdgeLabels: false,
@@ -452,6 +461,31 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
     return true;
   }).length;
 
+  // For the side panel in noteFocus mode: split connected notes by hop
+  // distance. Direct = 1-hop neighbors (most actionable); wider = everything
+  // else.
+  const directConnections = noteFocus
+    ? data.nodes.filter((n) => (n.distance ?? 0) === 1).sort(byFolderThenLabel)
+    : [];
+  const widerConnections = noteFocus
+    ? data.nodes.filter((n) => (n.distance ?? 0) >= 2).sort(byFolderThenLabel)
+    : [];
+
+  const linkagesUrl = (notePath: string): string =>
+    '/admin/codex/graph/note/' +
+    notePath
+      .replace(/\.md$/i, '')
+      .split(/[\\/]/g)
+      .map((seg) => encodeURIComponent(seg))
+      .join('/');
+
+  // Update the URL when the user changes depth via the toolbar buttons. Uses
+  // router.push so back/forward navigation reaches earlier depths.
+  const setDepth = (d: number) => {
+    if (!noteFocus) return;
+    router.push(`${linkagesUrl(noteFocus)}?depth=${d}`);
+  };
+
   return (
     <div className={styles.graphRoot}>
       <div className={styles.graphToolbar}>
@@ -531,8 +565,30 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
               Linkages from: {data.nodes.find((n) => n.id === noteFocus)?.label ?? noteFocus}
             </span>
             <span className={styles.graphMeta}>
-              {data.nodes.length} connected · {data.edges.length} links · depth {noteFocusDepth}
+              {data.nodes.length} connected · {data.edges.length} links
             </span>
+            <div className={styles.graphDepthControl}>
+              <span className={styles.graphDepthLabel}>Depth</span>
+              {[1, 2, 3].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={
+                    noteFocusDepth === d
+                      ? styles.graphDepthButtonActive
+                      : styles.graphDepthButton
+                  }
+                  onClick={() => setDepth(d)}
+                  title={
+                    d === 1
+                      ? 'Direct connections only'
+                      : `${d} hops out (much more data)`
+                  }
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
           </>
         ) : data.scope ? (
           <>
@@ -561,9 +617,95 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
         )}
       </div>
 
-      <div ref={containerRef} className={styles.graphCanvas} />
+      <div className={noteFocus ? styles.graphBodySplit : styles.graphBody}>
+        {noteFocus && (
+          <aside className={styles.graphLinkagesPanel}>
+            {directConnections.length > 0 && (
+              <section className={styles.graphLinkagesSection}>
+                <h4 className={styles.graphLinkagesHeading}>
+                  Direct connections
+                  <span className={styles.graphLinkagesCount}>{directConnections.length}</span>
+                </h4>
+                <ul className={styles.graphLinkagesList}>
+                  {directConnections.map((n) => (
+                    <li
+                      key={n.id}
+                      className={
+                        hoveredId === n.id
+                          ? styles.graphLinkagesItemActive
+                          : styles.graphLinkagesItem
+                      }
+                      onMouseEnter={() => setHoveredId(n.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      onClick={() => router.push(linkagesUrl(n.id))}
+                      title={`Pivot linkages view onto ${n.label}`}
+                    >
+                      <span
+                        className={styles.graphLinkagesItemDot}
+                        style={{ background: folderColorMap.get(n.folder) ?? '#888' }}
+                      />
+                      <span className={styles.graphLinkagesItemLabel}>{n.label}</span>
+                      <span className={styles.graphLinkagesItemFolder}>
+                        {n.folder.replace(/^\d+\s*-\s*/, '')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {widerConnections.length > 0 && (
+              <section className={styles.graphLinkagesSection}>
+                <h4 className={styles.graphLinkagesHeading}>
+                  Wider neighborhood
+                  <span className={styles.graphLinkagesCount}>{widerConnections.length}</span>
+                </h4>
+                <ul className={styles.graphLinkagesList}>
+                  {widerConnections.map((n) => (
+                    <li
+                      key={n.id}
+                      className={
+                        hoveredId === n.id
+                          ? styles.graphLinkagesItemActive
+                          : styles.graphLinkagesItem
+                      }
+                      onMouseEnter={() => setHoveredId(n.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      onClick={() => router.push(linkagesUrl(n.id))}
+                      title={`Pivot linkages view onto ${n.label}`}
+                    >
+                      <span
+                        className={styles.graphLinkagesItemDot}
+                        style={{ background: folderColorMap.get(n.folder) ?? '#888' }}
+                      />
+                      <span className={styles.graphLinkagesItemLabel}>{n.label}</span>
+                      <span className={styles.graphLinkagesItemFolderSubtle}>
+                        {n.folder.replace(/^\d+\s*-\s*/, '')} · {n.distance ?? 0} hops
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {directConnections.length === 0 && widerConnections.length === 0 && (
+              <p className={styles.graphLinkagesEmpty}>
+                No linkages found at this depth. Try increasing depth in the header.
+              </p>
+            )}
+          </aside>
+        )}
+        <div ref={containerRef} className={styles.graphCanvas} />
+      </div>
     </div>
   );
+}
+
+// Sort comparator: folder ascending, then label ascending. Used to group
+// linkage list items by folder.
+function byFolderThenLabel(a: CodexGraphNode, b: CodexGraphNode): number {
+  const f = a.folder.localeCompare(b.folder);
+  return f !== 0 ? f : a.label.localeCompare(b.label);
 }
 
 // ─── reducers (pure factories that read from a state ref) ────────────────────
@@ -648,6 +790,53 @@ function makeEdgeReducer(
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+// Concentric ring layout for noteFocus mode: focused note at origin,
+// neighbors arranged in rings by hop distance, sorted by folder so
+// same-folder neighbors cluster as arc-segments. Replaces ForceAtlas2 for
+// this view since we already know the right structure.
+function computeConcentricLayout(
+  nodes: CodexGraphNode[],
+  focusedId: string,
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>();
+  const byDistance = new Map<number, CodexGraphNode[]>();
+  for (const n of nodes) {
+    const d = n.distance ?? 0;
+    if (!byDistance.has(d)) byDistance.set(d, []);
+    byDistance.get(d)!.push(n);
+  }
+
+  positions.set(focusedId, { x: 0, y: 0 });
+
+  const distances = [...byDistance.keys()].filter((d) => d > 0).sort((a, b) => a - b);
+  // Ring radii grow exponentially so outer rings have proportionally more
+  // circumference for their (typically much larger) populations.
+  let radius = 1;
+  for (const dist of distances) {
+    const ringNodes = byDistance.get(dist)!;
+    // Sort by folder (then label) so same-folder neighbors arc-cluster.
+    ringNodes.sort((a, b) => {
+      const folderCmp = a.folder.localeCompare(b.folder);
+      return folderCmp !== 0 ? folderCmp : a.label.localeCompare(b.label);
+    });
+    const count = ringNodes.length;
+    // Make sure dense outer rings have enough circumference per node.
+    const minCircumferencePerNode = 0.6;
+    const requiredRadius = (count * minCircumferencePerNode) / (2 * Math.PI);
+    radius = Math.max(radius, requiredRadius);
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
+      positions.set(ringNodes[i].id, {
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+      });
+    }
+    radius *= 1.8;
+  }
+
+  return positions;
+}
 
 // Lighten / darken a hex color by amt in [-1, 1]. Negative = darker.
 function shadeHex(hex: string, amt: number): string {

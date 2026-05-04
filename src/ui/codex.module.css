@@ -553,6 +553,170 @@
   color: var(--text-primary);
 }
 
+/* Depth control buttons in the noteFocus header */
+.graphDepthControl {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.6rem;
+}
+
+.graphDepthLabel {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-right: 0.2rem;
+}
+
+.graphDepthButton,
+.graphDepthButtonActive {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.graphDepthButton:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary);
+}
+
+.graphDepthButtonActive {
+  background: rgba(96, 165, 250, 0.2);
+  border-color: rgba(96, 165, 250, 0.6);
+  color: #93c5fd;
+}
+
+/* Body container: split into linkages panel + canvas in noteFocus mode. */
+.graphBody {
+  flex: 1;
+  display: flex;
+  min-height: 400px;
+}
+
+.graphBodySplit {
+  flex: 1;
+  display: flex;
+  min-height: 400px;
+  gap: 0.5rem;
+}
+
+/* Linkages browse panel */
+.graphLinkagesPanel {
+  width: 22rem;
+  min-width: 18rem;
+  max-width: 26rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.75rem 0.5rem;
+  overflow-y: auto;
+  background: rgba(15, 18, 28, 0.6);
+  border-right: 1px solid var(--border);
+  border-radius: 6px 0 0 6px;
+}
+
+.graphLinkagesSection {
+  display: flex;
+  flex-direction: column;
+}
+
+.graphLinkagesHeading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.graphLinkagesCount {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+}
+
+.graphLinkagesList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.graphLinkagesItem,
+.graphLinkagesItemActive {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  transition: background-color 100ms ease;
+}
+
+.graphLinkagesItem:hover,
+.graphLinkagesItemActive {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+}
+
+.graphLinkagesItemActive {
+  background: rgba(96, 165, 250, 0.18);
+}
+
+.graphLinkagesItemDot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.graphLinkagesItemLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.graphLinkagesItemFolder {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.graphLinkagesItemFolderSubtle {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  opacity: 0.65;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.graphLinkagesEmpty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
 .graphHint {
   margin-left: 0.6rem;
   padding: 0.1rem 0.45rem;
