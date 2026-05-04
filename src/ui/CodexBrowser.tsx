@@ -144,6 +144,11 @@ interface Props {
   view?: CodexView;
   selectedPath?: string;
   graphScope?: string;
+  /** Note-centric linkages mode — pass the note path; CodexGraph runs the
+   *  vaultNoteNeighborhood query instead of vaultGraph. */
+  graphNoteFocus?: string;
+  /** Hop depth for graphNoteFocus mode. Default 2, server caps at 5. */
+  graphNoteFocusDepth?: number;
   /** When true, the note view starts in editor mode (used by ?new=1 flow). */
   startInCreate?: boolean;
 }
@@ -152,6 +157,8 @@ export default function CodexBrowser({
   view = 'welcome',
   selectedPath,
   graphScope,
+  graphNoteFocus,
+  graphNoteFocusDepth,
   startInCreate = false,
 }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
@@ -870,7 +877,13 @@ export default function CodexBrowser({
       <main className={styles.main}>
         {error && <div className={styles.error}>{error}</div>}
         {!error && view === 'welcome' && <Welcome />}
-        {!error && view === 'graph' && <CodexGraph scope={graphScope} />}
+        {!error && view === 'graph' && (
+          <CodexGraph
+            scope={graphScope}
+            noteFocus={graphNoteFocus}
+            noteFocusDepth={graphNoteFocusDepth}
+          />
+        )}
         {!error && view === 'note' && loadingNote && (
           <div className={styles.spinnerWrap}>Loading note…</div>
         )}
