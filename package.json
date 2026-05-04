@@ -32,30 +32,52 @@
   "peerDependencies": {
     "@prisma/client": ">=5",
     "@uiw/react-md-editor": ">=4",
-    "graphql": ">=16",
     "graphology": ">=0.26",
+    "graphology-layout-forceatlas2": ">=0.10",
     "graphology-metrics": ">=2",
+    "graphql": ">=16",
     "gray-matter": ">=4",
     "next": ">=14",
     "react": ">=18",
     "react-dom": ">=18",
-    "react-force-graph-2d": ">=1",
     "react-markdown": ">=10",
     "rehype-autolink-headings": ">=7",
     "rehype-slug": ">=6",
     "remark-gfm": ">=4",
+    "sigma": ">=3",
     "simple-git": ">=3"
   },
   "peerDependenciesMeta": {
-    "@uiw/react-md-editor": { "optional": true },
-    "next": { "optional": true },
-    "react": { "optional": true },
-    "react-dom": { "optional": true },
-    "react-force-graph-2d": { "optional": true },
-    "react-markdown": { "optional": true },
-    "rehype-autolink-headings": { "optional": true },
-    "rehype-slug": { "optional": true },
-    "remark-gfm": { "optional": true }
+    "@uiw/react-md-editor": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "react-markdown": {
+      "optional": true
+    },
+    "sigma": {
+      "optional": true
+    },
+    "graphology-layout-forceatlas2": {
+      "optional": true
+    },
+    "rehype-autolink-headings": {
+      "optional": true
+    },
+    "rehype-slug": {
+      "optional": true
+    },
+    "remark-gfm": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@prisma/client": "^5.7.1",
@@ -64,17 +86,18 @@
     "@types/react-dom": "^18.2.18",
     "@uiw/react-md-editor": "^4.1.0",
     "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "graphology-metrics": "^2.4.0",
     "graphql": "^16.8.1",
     "gray-matter": "^4.0.3",
     "next": "^14.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-force-graph-2d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "rehype-autolink-headings": "^7.1.0",
     "rehype-slug": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "sigma": "^3.0.3",
     "simple-git": "^3.36.0",
     "typescript": "^5.3.3",
     "vitest": "^4.0.18"

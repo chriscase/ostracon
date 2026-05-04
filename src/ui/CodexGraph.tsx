@@ -1,21 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import dynamic from 'next/dynamic';
 import { useCodexGraphqlRequest, useCodexNavigation } from './CodexAdapters';
 import { noteHref } from './CodexTree';
 import styles from './codex.module.css';
 
-// react-force-graph-2d is canvas-based and SSR-incompatible. The library's
-// type defs use a wide NodeObject shape that doesn't carry our custom fields
-// (kind, pageRank, etc.). We type the component loosely rather than threading
-// generics through the dynamic-import boundary; accessor callbacks below cast
-// to the project shape.
-type LooseGraphProps = Record<string, unknown>;
-const ForceGraph2D = dynamic(
-  () => import('react-force-graph-2d'),
-  { ssr: false, loading: () => <div className={styles.spinnerWrap}>Loading graph engine…</div> },
-) as unknown as React.ComponentType<LooseGraphProps & { ref?: React.Ref<unknown> }>;
+// Sigma + graphology + ForceAtlas2 are loaded dynamically inside the mount
+// effect — they're WebGL/canvas dependent and can't run server-side. The
+// libraries themselves carry their own type defs; we use loose `any`-ish
+// typing on the held-instance refs because the renderer is fully self-managed
+// after we hand it the graph + container.
 
 const GRAPH_QUERY = `
   query VaultGraph($scope: String) {
@@ -78,9 +72,8 @@ interface Props {
   scope?: string;
 }
 
-// Curated palette — saturated enough to read on a dark canvas, but harmonious
-// rather than the random-hue salad of `hsl(<hash> 60% 65%)`. Folders cycle
-// through this list deterministically (by sorted folder name index).
+// Curated palette — saturated enough to read on a dark canvas, harmonious
+// rather than the random-hue salad of `hsl(<hash> 60% 65%)`.
 const FOLDER_PALETTE = [
   '#60a5fa', // blue
   '#34d399', // emerald
@@ -96,11 +89,10 @@ const FOLDER_PALETTE = [
   '#facc15', // yellow
 ];
 
-// Fallback supernode color used only if a supernode somehow shows up without
-// a matching folder palette entry. Real supernodes use the same folder palette
-// as their notes (so the folder-overview reads as a true legend / preview of
-// what each folder will look like when drilled into).
-const SUPERNODE_FALLBACK = '#93c5fd';
+const DIM_COLOR = '#2a2f3a';
+const DIM_EDGE = 'rgba(120, 130, 150, 0.05)';
+const HOT_EDGE = 'rgba(180, 200, 230, 0.55)';
+const DEFAULT_EDGE = 'rgba(150, 160, 180, 0.18)';
 
 export default function CodexGraph({ scope }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
@@ -108,18 +100,23 @@ export default function CodexGraph({ scope }: Props) {
   const router = useNavRouter();
   const [rawData, setRawData] = useState<CodexGraphPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [size, setSize] = useState<{ width: number; height: number }>({
-    width: 800,
-    height: 600,
-  });
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [folderFilter, setFolderFilter] = useState<Set<string>>(new Set());
-  const containerRef = useRef<HTMLDivElement>(null);
-  const fgRef = useRef<unknown>(null);
 
-  // Mobile detection — react-force-graph performs poorly under 768px.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sigmaRef = useRef<unknown>(null);
+  const graphRef = useRef<unknown>(null);
+  const reducerStateRef = useRef({
+    search: '',
+    folderFilter: new Set<string>(),
+    hoveredId: null as string | null,
+    neighbors: null as Set<string> | null,
+  });
+
+  // Mobile detection — Sigma performs poorly under 768px and the labels are
+  // unreadable at that size.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const mql = window.matchMedia('(max-width: 768px)');
@@ -127,19 +124,6 @@ export default function CodexGraph({ scope }: Props) {
     update();
     mql.addEventListener('change', update);
     return () => mql.removeEventListener('change', update);
-  }, []);
-
-  // Resize observer drives the force-graph viewport.
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      setSize({ width: Math.max(300, width), height: Math.max(300, height) });
-    });
-    ro.observe(containerRef.current);
-    return () => ro.disconnect();
   }, []);
 
   // Load graph data when scope changes.
@@ -170,15 +154,13 @@ export default function CodexGraph({ scope }: Props) {
     };
   }, [scope]);
 
-  // The supernode resolver groups every file by its `folder`, including
-  // top-level files (Home.md, README.md, CLAUDE.md) which end up as
-  // 1-note "fake folders" named after the file. Filter those out — they're
-  // visual noise that pollutes the legend chips and the canvas. Real folders
-  // never have a file-extension suffix.
+  // The supernode resolver groups every file by `folder`, including top-level
+  // files (Home.md, README.md, CLAUDE.md) which end up as 1-note "fake folders"
+  // named after the file. Filter them out as visual noise.
   const looksLikeFile = useCallback((s: string): boolean => /\.\w+$/.test(s), []);
   const data = useMemo<CodexGraphPayload | null>(() => {
     if (!rawData) return null;
-    if (rawData.scope) return rawData; // Folder-scope: notes ARE files; don't filter.
+    if (rawData.scope) return rawData;
     const visibleNodes = rawData.nodes.filter((n) => !looksLikeFile(n.id));
     const visibleIds = new Set(visibleNodes.map((n) => n.id));
     const visibleEdges = rawData.edges.filter(
@@ -187,199 +169,163 @@ export default function CodexGraph({ scope }: Props) {
     return { ...rawData, nodes: visibleNodes, edges: visibleEdges };
   }, [rawData, looksLikeFile]);
 
-  // Stable folder → palette index map. Supernodes have id === folder, so
-  // the supernode palette lookup hits the same map.
+  // Stable folder → palette index map.
   const folderColorMap = useMemo(() => {
     if (!data) return new Map<string, string>();
     const folders = Array.from(new Set(data.nodes.map((n) => n.folder))).sort();
     return new Map(folders.map((f, i) => [f, FOLDER_PALETTE[i % FOLDER_PALETTE.length]]));
   }, [data]);
 
-  // Adjacency map for hover-highlight and local-mode neighbor lookup.
-  const neighbors = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    if (!data) return map;
-    data.nodes.forEach((n) => map.set(n.id, new Set()));
-    data.edges.forEach((e) => {
-      map.get(e.from)?.add(e.to);
-      map.get(e.to)?.add(e.from);
-    });
-    return map;
-  }, [data]);
-
-  // PageRank-based "is this label important enough to render at this zoom"
-  // threshold lookup. We pre-compute a percentile rank so the show/hide
-  // decision is constant-time per frame.
-  const pageRankPercentile = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!data) return map;
-    const sorted = [...data.nodes].sort((a, b) => a.pageRank - b.pageRank);
-    sorted.forEach((n, i) => {
-      map.set(n.id, sorted.length === 1 ? 1 : i / (sorted.length - 1));
-    });
-    return map;
-  }, [data]);
-
-  // Pre-position nodes so the simulation starts from a sensible layout instead
-  // of all-near-origin. For supernodes (folder overview): even circle around
-  // origin so high cross-folder link counts can't collapse everything to the
-  // centroid. For folder subgraphs: golden-angle spiral with radius = 1 -
-  // pageRank so hubs end up central.
-  const positionedNodes = useMemo(() => {
-    if (!data) return [];
-    const r = Math.min(size.width, size.height) / 2 - 80;
-    if (!data.scope) {
-      // Supernode view: circle, sorted by noteCount so big folders are
-      // adjacent (less wraparound for cross-folder links).
-      const sorted = [...data.nodes].sort(
-        (a, b) => (b.noteCount ?? 0) - (a.noteCount ?? 0),
-      );
-      const n = sorted.length;
-      return sorted.map((node, i) => ({
-        ...node,
-        x: Math.cos((i / n) * 2 * Math.PI) * r * 0.8,
-        y: Math.sin((i / n) * 2 * Math.PI) * r * 0.8,
-      }));
-    }
-    // Folder-scope view.
-    const sorted = [...data.nodes].sort((a, b) => b.pageRank - a.pageRank);
-    const maxRank = Math.max(1e-9, ...sorted.map((n) => n.pageRank));
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    return sorted.map((n, i) => ({
-      ...n,
-      x: Math.cos(i * goldenAngle) * (1 - n.pageRank / maxRank) * r,
-      y: Math.sin(i * goldenAngle) * (1 - n.pageRank / maxRank) * r,
-    }));
-  }, [data, size.width, size.height]);
-
-  // Tune the d3 force simulation for less hairball on dense graphs. We push
-  // the link distance way out from the library default of ~30 and crank charge
-  // (repulsion) so unrelated nodes find their own breathing room. We mutate
-  // the existing forces (link, charge) rather than importing d3-force as a
-  // new dep — react-force-graph-2d already wires those up internally.
+  // Mount Sigma + run ForceAtlas2 layout when data arrives. Re-runs on data
+  // change (e.g. drilling into a folder).
   useEffect(() => {
-    const fg = fgRef.current as
+    if (!containerRef.current || !data || isMobile) return;
+    let killed = false;
+    let sigmaInstance: { kill: () => void } | null = null;
+
+    (async () => {
+      const [{ default: Sigma }, { default: Graph }, { default: forceAtlas2 }] =
+        await Promise.all([
+          import('sigma'),
+          import('graphology'),
+          import('graphology-layout-forceatlas2'),
+        ]);
+      if (killed || !containerRef.current) return;
+
+      const graph = new Graph();
+      const n = data.nodes.length;
+      data.nodes.forEach((node, i) => {
+        graph.addNode(node.id, {
+          // Initial position on a circle so FA2 has a sane starting layout.
+          x: Math.cos((i / n) * 2 * Math.PI),
+          y: Math.sin((i / n) * 2 * Math.PI),
+          size: nodeSize(node),
+          color: folderColorMap.get(node.folder) ?? '#9aa3b2',
+          label: node.label,
+          // Custom attrs preserved for reducer logic + click handler.
+          kind: node.kind,
+          folder: node.folder,
+          pageRank: node.pageRank,
+          noteCount: node.noteCount,
+        });
+      });
+
+      data.edges.forEach((e) => {
+        if (
+          graph.hasNode(e.from) &&
+          graph.hasNode(e.to) &&
+          !graph.hasEdge(e.from, e.to) &&
+          e.from !== e.to
+        ) {
+          graph.addEdge(e.from, e.to, {
+            size: Math.max(0.5, Math.log1p(e.weight) * 1.2),
+            color: DEFAULT_EDGE,
+            weight: e.weight,
+          });
+        }
+      });
+
+      // ForceAtlas2 with linLogMode is the recipe for densely-connected
+      // categorical graphs (our supernode case). For folder subgraphs (less
+      // dense, more notes) we tune slightly differently.
+      forceAtlas2.assign(graph, {
+        iterations: data.scope ? 600 : 400,
+        settings: {
+          gravity: data.scope ? 0.3 : 1.2,
+          scalingRatio: data.scope ? 8 : 30,
+          strongGravityMode: false,
+          barnesHutOptimize: graph.order > 80,
+          linLogMode: true,
+          outboundAttractionDistribution: true,
+          adjustSizes: true,
+          edgeWeightInfluence: 1,
+          slowDown: 1,
+        },
+      });
+
+      const sigma = new Sigma(graph, containerRef.current, {
+        renderEdgeLabels: false,
+        labelSize: 12,
+        labelWeight: '500',
+        labelDensity: 0.5,
+        labelGridCellSize: 80,
+        labelColor: { color: '#ffffff' },
+        labelFont: 'system-ui, -apple-system, sans-serif',
+        defaultNodeColor: '#9aa3b2',
+        defaultEdgeColor: DEFAULT_EDGE,
+        nodeReducer: (node, attrs) => makeNodeReducer(reducerStateRef)(node, attrs),
+        edgeReducer: (edge, attrs) =>
+          makeEdgeReducer(reducerStateRef, graph)(edge, attrs),
+      });
+
+      sigmaRef.current = sigma;
+      graphRef.current = graph;
+      sigmaInstance = sigma as unknown as { kill: () => void };
+
+      // Click navigation.
+      sigma.on('clickNode', ({ node }: { node: string }) => {
+        const a = graph.getNodeAttributes(node) as { kind: string };
+        if (a.kind === 'SUPERNODE') {
+          router.push(`/admin/codex/graph?scope=${encodeURIComponent(node)}`);
+        } else {
+          router.push(noteHref(node));
+        }
+      });
+
+      // Hover state — bubble up to React, the reducer effect picks it up.
+      sigma.on('enterNode', ({ node }: { node: string }) => setHoveredId(node));
+      sigma.on('leaveNode', () => setHoveredId(null));
+
+      // Camera fit after first render so the graph fills the canvas nicely.
+      setTimeout(() => {
+        if (!killed) sigma.getCamera().animatedReset({ duration: 600 });
+      }, 100);
+    })();
+
+    return () => {
+      killed = true;
+      if (sigmaInstance) sigmaInstance.kill();
+      sigmaRef.current = null;
+      graphRef.current = null;
+    };
+  }, [data, folderColorMap, isMobile, router]);
+
+  // Update the reducer state ref + refresh sigma when filters/hover change.
+  // The reducers themselves read from the ref so we avoid re-creating them
+  // (which would force a full re-mount of sigma).
+  useEffect(() => {
+    const sigma = sigmaRef.current as
+      | { refresh: () => void; setSetting: (k: string, v: unknown) => void }
+      | null;
+    const graph = graphRef.current as
       | {
-          d3Force?: (name: string, force?: unknown) => unknown;
-          d3ReheatSimulation?: () => void;
-          zoomToFit?: (ms?: number, padding?: number) => unknown;
+          neighbors: (id: string) => string[];
+          getNodeAttributes: (id: string) => Record<string, unknown>;
+          source: (e: string) => string;
+          target: (e: string) => string;
         }
       | null;
-    if (!fg || !data) return;
-    const linkForce = fg.d3Force?.('link') as
-      | { distance: (n: number) => unknown; strength: (n: number) => unknown }
-      | undefined;
-    if (linkForce) {
-      // Supernode view: HUGE spacing — only ~15 nodes but very high cross-link
-      // density (avg ~7 links/node), so weaker links would collapse everything
-      // to centroid. Folder subgraph: tighter but still wider than default.
-      const baseDist = data.scope ? 90 : 320;
-      linkForce.distance(baseDist);
-      // Weak link strength = repulsion wins. We want spread, not tight clusters.
-      linkForce.strength(data.scope ? 0.25 : 0.05);
-    }
-    const chargeForce = fg.d3Force?.('charge') as
-      | { strength: (n: number) => unknown; distanceMax?: (n: number) => unknown }
-      | undefined;
-    if (chargeForce) {
-      // Negative = repulsion. Big negative = lots of space between nodes.
-      // Supernode view needs MUCH more — 15 highly-connected nodes pile up.
-      chargeForce.strength(data.scope ? -350 : -2400);
-      // Cap effective distance so far-away nodes don't slow the simulation.
-      chargeForce.distanceMax?.(data.scope ? 600 : 2000);
-    }
-    // Reheat so the new params take effect on already-positioned data.
-    fg.d3ReheatSimulation?.();
-    // After the simulation has had time to settle, zoom to fit the whole
-    // graph. Without this the camera defaults are usually too tight or too
-    // loose for the new layout.
-    const zoomTimer = setTimeout(() => {
-      fg.zoomToFit?.(800, 80);
-    }, 1500);
-    return () => clearTimeout(zoomTimer);
-  }, [data]);
+    if (!sigma || !graph) return;
 
-  // Dim/highlight rules — node/link visibility for filter, alpha for hover.
-  const matchesSearch = useCallback(
-    (n: CodexGraphNode): boolean => {
-      if (!search.trim()) return true;
-      return n.label.toLowerCase().includes(search.toLowerCase());
-    },
-    [search],
-  );
+    reducerStateRef.current = {
+      search,
+      folderFilter,
+      hoveredId,
+      neighbors: hoveredId ? new Set(graph.neighbors(hoveredId)) : null,
+    };
+    sigma.refresh();
+  }, [search, folderFilter, hoveredId]);
 
-  const passesFolderFilter = useCallback(
-    (n: CodexGraphNode): boolean => {
-      if (folderFilter.size === 0) return true;
-      return folderFilter.has(n.folder);
-    },
-    [folderFilter],
-  );
+  if (isMobile) return <MobileFallback />;
+  if (error) return <div className={styles.error}>{error}</div>;
+  if (!data) return <div className={styles.spinnerWrap}>Loading graph…</div>;
 
-  const isVisible = useCallback(
-    (n: CodexGraphNode): boolean => matchesSearch(n) && passesFolderFilter(n),
-    [matchesSearch, passesFolderFilter],
-  );
-
-  const linkIsVisible = useCallback(
-    (l: { source: CodexGraphNode | string; target: CodexGraphNode | string }): boolean => {
-      const sId = typeof l.source === 'string' ? l.source : l.source.id;
-      const tId = typeof l.target === 'string' ? l.target : l.target.id;
-      // Link visible if both endpoints are visible per filters.
-      const sNode = data?.nodes.find((n) => n.id === sId);
-      const tNode = data?.nodes.find((n) => n.id === tId);
-      if (!sNode || !tNode) return false;
-      return isVisible(sNode) && isVisible(tNode);
-    },
-    [data, isVisible],
-  );
-
-  // For hover dimming: the node + its neighbors stay full-bright; everything
-  // else dims. Memoized as a hot-path function (called per node per frame).
-  const isHotForHover = useCallback(
-    (id: string): boolean => {
-      if (!hoveredId) return true;
-      if (id === hoveredId) return true;
-      return neighbors.get(hoveredId)?.has(id) ?? false;
-    },
-    [hoveredId, neighbors],
-  );
-
-  const linkIsHotForHover = useCallback(
-    (l: { source: CodexGraphNode | string; target: CodexGraphNode | string }): boolean => {
-      if (!hoveredId) return true;
-      const sId = typeof l.source === 'string' ? l.source : l.source.id;
-      const tId = typeof l.target === 'string' ? l.target : l.target.id;
-      return sId === hoveredId || tId === hoveredId;
-    },
-    [hoveredId],
-  );
-
-  if (isMobile) {
-    return <MobileFallback />;
-  }
-
-  if (error) {
-    return <div className={styles.error}>{error}</div>;
-  }
-
-  if (!data) {
-    return <div className={styles.spinnerWrap}>Loading graph…</div>;
-  }
-
-  const links = data.edges.map((e) => ({ source: e.from, target: e.to, weight: e.weight }));
-  const visibleNodeCount = data.nodes.filter(isVisible).length;
   const folders = Array.from(folderColorMap.keys());
-
-  // Adaptive label-visibility threshold — at low zoom (zoomed out), only show
-  // the top-N labels by pageRank. As you zoom in, more labels appear.
-  // pctThreshold is "show labels for nodes whose pageRank percentile >= this".
-  const labelThreshold = (globalScale: number): number => {
-    if (globalScale >= 2.5) return 0; // Very zoomed in: show all
-    if (globalScale >= 1.5) return 0.4; // Mid: top 60%
-    if (globalScale >= 0.8) return 0.7; // Default: top 30%
-    return 0.9; // Zoomed way out: only top 10%
-  };
+  const visibleNodeCount = data.nodes.filter((n) => {
+    if (search && !n.label.toLowerCase().includes(search.toLowerCase())) return false;
+    if (folderFilter.size > 0 && !folderFilter.has(n.folder)) return false;
+    return true;
+  }).length;
 
   return (
     <div className={styles.graphRoot}>
@@ -401,9 +347,7 @@ export default function CodexGraph({ scope }: Props) {
                 className={active ? styles.graphFolderChipActive : styles.graphFolderChip}
                 style={{
                   borderColor: folderColorMap.get(f) ?? '#888',
-                  background: active
-                    ? `${folderColorMap.get(f) ?? '#888'}33`
-                    : 'transparent',
+                  background: active ? `${folderColorMap.get(f) ?? '#888'}33` : 'transparent',
                 }}
                 onClick={() => {
                   setFolderFilter((prev) => {
@@ -466,217 +410,101 @@ export default function CodexGraph({ scope }: Props) {
         )}
       </div>
 
-      <div ref={containerRef} className={styles.graphCanvas}>
-        <ForceGraph2D
-          ref={fgRef as React.Ref<unknown>}
-          graphData={{ nodes: positionedNodes, links }}
-          width={size.width}
-          height={size.height}
-          nodeId="id"
-          nodeVisibility={(n: CodexGraphNode) => isVisible(n)}
-          linkVisibility={(l: { source: CodexGraphNode | string; target: CodexGraphNode | string }) =>
-            linkIsVisible(l)
-          }
-          nodeLabel={(n: CodexGraphNode) =>
-            n.kind === 'SUPERNODE'
-              ? `${n.label} · ${n.noteCount ?? 0} notes`
-              : `${n.label} · pr ${(n.pageRank * 100).toFixed(2)} · ${n.folder}`
-          }
-          onNodeHover={(n: CodexGraphNode | null) => setHoveredId(n?.id ?? null)}
-          nodeCanvasObject={(
-            n: CodexGraphNode & { x?: number; y?: number },
-            ctx: CanvasRenderingContext2D,
-            globalScale: number,
-          ) => {
-            if (n.x === undefined || n.y === undefined) return;
-            const radius = nodeRadius(n);
-            const hot = isHotForHover(n.id);
-            const baseAlpha = hot ? 1 : 0.18;
-            // Supernodes have id === folder per the resolver, so the same
-            // folderColorMap drives both supernode + note coloring.
-            const color =
-              folderColorMap.get(n.folder) ??
-              (n.kind === 'SUPERNODE' ? SUPERNODE_FALLBACK : '#9aa3b2');
-
-            // Glow for hover-target / hover-neighbors.
-            if (hoveredId && hot && globalScale > 0.4) {
-              ctx.save();
-              const glow = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, radius * 3.5);
-              glow.addColorStop(0, withAlpha(color, 0.4));
-              glow.addColorStop(1, withAlpha(color, 0));
-              ctx.fillStyle = glow;
-              ctx.beginPath();
-              ctx.arc(n.x, n.y, radius * 3.5, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.restore();
-            }
-
-            // Dot.
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
-            ctx.fillStyle = withAlpha(color, baseAlpha);
-            ctx.fill();
-            ctx.strokeStyle = hoveredId === n.id
-              ? withAlpha('#ffffff', 0.9)
-              : withAlpha('#000000', 0.35 * baseAlpha);
-            ctx.lineWidth = hoveredId === n.id ? 1.5 : 0.5;
-            ctx.stroke();
-
-            // Label visibility:
-            // - Supernode level: only show on hover (the chip row at the top
-            //   serves as the always-visible legend; canvas labels just pile
-            //   up on each other and create visual mush).
-            // - Note level: show if hovered/neighbor, or if this node's
-            //   pageRank percentile is above the zoom-dependent threshold.
-            const pct = pageRankPercentile.get(n.id) ?? 0;
-            const threshold = labelThreshold(globalScale);
-            const showLabel = n.kind === 'SUPERNODE'
-              ? Boolean(hoveredId && hot)
-              : Boolean((hoveredId && hot) || pct >= threshold);
-            if (!showLabel) return;
-
-            const label = truncateLabel(n.label, n.kind === 'SUPERNODE' ? 30 : 22);
-            const fontSize = Math.max(9, 12 / globalScale);
-            ctx.font = `${n.kind === 'SUPERNODE' ? '600 ' : ''}${fontSize}px system-ui, sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            const labelY = n.y + radius + 3 / globalScale;
-            // Outline-style text for legibility without a heavy background plate.
-            ctx.lineWidth = 3 / globalScale;
-            ctx.strokeStyle = withAlpha('#000000', 0.7 * baseAlpha);
-            ctx.strokeText(label, n.x, labelY);
-            ctx.fillStyle = withAlpha('#ffffff', 0.95 * baseAlpha);
-            ctx.fillText(label, n.x, labelY);
-          }}
-          nodePointerAreaPaint={(
-            n: CodexGraphNode & { x?: number; y?: number },
-            color: string,
-            ctx: CanvasRenderingContext2D,
-          ) => {
-            // Hit-test area = the dot only, NOT the label. Otherwise wide
-            // labels would steal clicks from neighbors.
-            if (n.x === undefined || n.y === undefined) return;
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, nodeRadius(n), 0, Math.PI * 2);
-            ctx.fill();
-          }}
-          linkColor={(l: {
-            weight: number;
-            source: CodexGraphNode | string;
-            target: CodexGraphNode | string;
-          }) => {
-            const hot = linkIsHotForHover(l);
-            const baseAlpha = hot ? 0.55 : 0.08;
-            // Slight folder-color tint at the source side for cross-folder
-            // legibility. We just use a neutral grey for now (canvas2d doesn't
-            // do gradient links easily without per-segment paint).
-            return withAlpha('#b8c1d4', baseAlpha);
-          }}
-          linkWidth={(l: { weight: number }) => Math.max(0.8, Math.log1p(l.weight) * 1.2)}
-          linkCurvature={data.scope ? 0.15 : 0.05}
-          linkDirectionalParticles={(l: {
-            weight: number;
-            source: CodexGraphNode | string;
-            target: CodexGraphNode | string;
-          }) => {
-            // Particles only when this link is "hot" via hover, otherwise the
-            // canvas churn dominates idle frames.
-            if (!hoveredId || !linkIsHotForHover(l)) return 0;
-            return Math.min(4, Math.max(1, Math.floor(l.weight)));
-          }}
-          linkDirectionalParticleSpeed={0.008}
-          linkDirectionalParticleWidth={2}
-          backgroundColor="rgba(0, 0, 0, 0)"
-          cooldownTicks={300}
-          d3AlphaDecay={0.02}
-          d3VelocityDecay={0.35}
-          warmupTicks={50}
-          onEngineTick={() => {
-            // Brute-force collision resolution. d3-force has forceCollide but
-            // adding it requires a new dep + peerDep dance; with at most ~50
-            // visible nodes this O(n^2) push-apart pass is cheap (~2500 ops
-            // per tick) and Just Works. Padding scales with node radii so the
-            // edge-of-circle gap stays visually consistent across sizes.
-            const nodes = positionedNodes as Array<
-              CodexGraphNode & { x?: number; y?: number; vx?: number; vy?: number }
-            >;
-            const PAD = 6;
-            for (let i = 0; i < nodes.length; i++) {
-              const a = nodes[i];
-              if (a.x === undefined || a.y === undefined) continue;
-              const ar = nodeRadius(a);
-              for (let j = i + 1; j < nodes.length; j++) {
-                const b = nodes[j];
-                if (b.x === undefined || b.y === undefined) continue;
-                const br = nodeRadius(b);
-                const dx = b.x - a.x;
-                const dy = b.y - a.y;
-                const distSq = dx * dx + dy * dy;
-                const minDist = ar + br + PAD;
-                if (distSq < minDist * minDist && distSq > 0) {
-                  const dist = Math.sqrt(distSq);
-                  const overlap = (minDist - dist) / 2;
-                  const nx = dx / dist;
-                  const ny = dy / dist;
-                  a.x -= nx * overlap;
-                  a.y -= ny * overlap;
-                  b.x += nx * overlap;
-                  b.y += ny * overlap;
-                }
-              }
-            }
-          }}
-          onNodeClick={(node: CodexGraphNode) => {
-            if (node.kind === 'SUPERNODE') {
-              router.push(`/admin/codex/graph?scope=${encodeURIComponent(node.id)}`);
-            } else {
-              router.push(noteHref(node.id));
-            }
-          }}
-        />
-      </div>
+      <div ref={containerRef} className={styles.graphCanvas} />
     </div>
   );
 }
 
+// ─── reducers (pure factories that read from a state ref) ────────────────────
+
+type ReducerStateRef = React.MutableRefObject<{
+  search: string;
+  folderFilter: Set<string>;
+  hoveredId: string | null;
+  neighbors: Set<string> | null;
+}>;
+
+function makeNodeReducer(stateRef: ReducerStateRef) {
+  return (node: string, attrs: Record<string, unknown>) => {
+    const { search, folderFilter, hoveredId, neighbors } = stateRef.current;
+
+    // Apply text + folder filters.
+    const label = String(attrs.label ?? '');
+    const folder = String(attrs.folder ?? '');
+    if (search && !label.toLowerCase().includes(search.toLowerCase())) {
+      return { ...attrs, hidden: true };
+    }
+    if (folderFilter.size > 0 && !folderFilter.has(folder)) {
+      return { ...attrs, hidden: true };
+    }
+
+    // Apply hover dim — non-neighbors fade.
+    if (hoveredId) {
+      const isHot = node === hoveredId || (neighbors?.has(node) ?? false);
+      if (!isHot) {
+        return { ...attrs, color: DIM_COLOR, label: '', zIndex: 0 };
+      }
+      // Hovered node + its neighbors: keep label visible even if it'd
+      // normally be culled by labelDensity.
+      return { ...attrs, forceLabel: true, zIndex: 2 };
+    }
+
+    // No hover, no filters → at supernode level we suppress the canvas label
+    // (the chip row at the top is the legend) so the canvas stays clean.
+    if (attrs.kind === 'SUPERNODE') {
+      return { ...attrs, label: '' };
+    }
+    return attrs;
+  };
+}
+
+function makeEdgeReducer(
+  stateRef: ReducerStateRef,
+  graph: {
+    source: (e: string) => string;
+    target: (e: string) => string;
+    getNodeAttributes: (id: string) => Record<string, unknown>;
+  },
+) {
+  return (edge: string, attrs: Record<string, unknown>) => {
+    const { search, folderFilter, hoveredId } = stateRef.current;
+
+    const sId = graph.source(edge);
+    const tId = graph.target(edge);
+    const sAttrs = graph.getNodeAttributes(sId);
+    const tAttrs = graph.getNodeAttributes(tId);
+    const sLabel = String(sAttrs.label ?? '');
+    const tLabel = String(tAttrs.label ?? '');
+    const sFolder = String(sAttrs.folder ?? '');
+    const tFolder = String(tAttrs.folder ?? '');
+
+    const sHidden =
+      (search && !sLabel.toLowerCase().includes(search.toLowerCase())) ||
+      (folderFilter.size > 0 && !folderFilter.has(sFolder));
+    const tHidden =
+      (search && !tLabel.toLowerCase().includes(search.toLowerCase())) ||
+      (folderFilter.size > 0 && !folderFilter.has(tFolder));
+    if (sHidden || tHidden) return { ...attrs, hidden: true };
+
+    if (hoveredId) {
+      const involves = sId === hoveredId || tId === hoveredId;
+      return { ...attrs, color: involves ? HOT_EDGE : DIM_EDGE };
+    }
+
+    return attrs;
+  };
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function nodeRadius(n: CodexGraphNode): number {
-  // Supernode sizes must allow ~12 nodes to coexist without overlap given the
-  // canvas height (~600px). Cap at 32px radius (64px diameter) so even big
-  // folders fit alongside smaller ones. Variance still reads via the sqrt
-  // scaling.
+function nodeSize(n: CodexGraphNode): number {
+  // Sigma's size units are roughly screen-pixels at default zoom — much
+  // smaller numbers than the canvas-pixel radii the previous renderer used.
   if (n.kind === 'SUPERNODE') {
     const count = n.noteCount ?? 1;
-    return Math.max(12, Math.min(32, Math.sqrt(count) * 2.6));
+    return Math.max(8, Math.min(28, Math.sqrt(count) * 2.2));
   }
-  return Math.max(3.5, Math.sqrt(n.pageRank * 4500));
-}
-
-function truncateLabel(label: string, max: number): string {
-  return label.length > max ? label.slice(0, max - 1) + '…' : label;
-}
-
-// Paint helper — accept hex or rgba and reapply alpha.
-function withAlpha(color: string, alpha: number): string {
-  if (color.startsWith('rgba')) {
-    return color.replace(/rgba\(([^)]+)\)/, (_m, inner) => {
-      const parts = inner.split(',').map((p: string) => p.trim());
-      return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
-    });
-  }
-  if (color.startsWith('#')) {
-    const hex = color.slice(1);
-    const expanded = hex.length === 3
-      ? hex.split('').map((c) => c + c).join('')
-      : hex;
-    const r = parseInt(expanded.slice(0, 2), 16);
-    const g = parseInt(expanded.slice(2, 4), 16);
-    const b = parseInt(expanded.slice(4, 6), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-  return color;
+  return Math.max(3, Math.min(20, Math.sqrt(n.pageRank * 4500)));
 }
 
 function MobileFallback() {
@@ -696,12 +524,9 @@ function MobileFallback() {
         if (errors?.length) {
           setError(errors.map((e) => e.message).join('; '));
         } else {
-          // Even at supernode level we get pageRank summed per folder, which
-          // gives a useful "biggest folders" sort. PR 3 will surface true
-          // top-notes via a dedicated query.
-          const sorted = (data?.vaultGraph.nodes ?? []).slice().sort(
-            (a, b) => b.pageRank - a.pageRank,
-          );
+          const sorted = (data?.vaultGraph.nodes ?? [])
+            .slice()
+            .sort((a, b) => b.pageRank - a.pageRank);
           setHits(sorted);
         }
       } catch (err) {
@@ -729,9 +554,7 @@ function MobileFallback() {
         {hits.map((h) => (
           <li key={h.id}>
             <strong>{h.label}</strong>
-            <span className={styles.notePath}>
-              influence {(h.pageRank * 100).toFixed(2)}
-            </span>
+            <span className={styles.notePath}>influence {(h.pageRank * 100).toFixed(2)}</span>
           </li>
         ))}
       </ul>
