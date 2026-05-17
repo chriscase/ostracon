@@ -17,6 +17,15 @@
     border-bottom: 1px solid var(--border);
     max-height: 40vh;
   }
+
+  /* When a note is open on a narrow screen, the desktop two-column layout
+   * collapsed to single-column would push the note content below a
+   * 40vh-tall tree — the user clicks an item, sees it flash in, then the
+   * tree pushes it offscreen. Hide the tree in note view; the host's
+   * chrome (or browser back) gets the user back to the welcome/tree view. */
+  .layout[data-view='note'] .sidebar {
+    display: none;
+  }
 }
 
 .sidebar {

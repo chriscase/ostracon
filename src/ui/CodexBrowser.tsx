@@ -718,7 +718,12 @@ export default function CodexBrowser({
   const titleFromPath = (rel: string) => rel.split('/').pop()?.replace(/\.md$/, '') ?? 'New note';
 
   return (
-    <div className={styles.layout}>
+    // data-view drives the mobile sidebar visibility rule in codex.module.css
+    // — on narrow screens, the sidebar gets `display: none` when view='note'
+    // so the note content owns the viewport instead of being pushed below
+    // the tree (which is the desktop layout collapsed). Hosts navigate back
+    // via their own chrome (top-bar "Notes" link, browser back, etc.).
+    <div className={styles.layout} data-view={view}>
       <aside className={styles.sidebar}>
         <div className={styles.sidebarTopBar}>
           <Link
