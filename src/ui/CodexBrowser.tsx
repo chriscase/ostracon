@@ -912,6 +912,7 @@ export default function CodexBrowser({
               canEdit
               onEdit={() => setEditing(true)}
               onShowHistory={() => setHistoryOpen((v) => !v)}
+              historyOpen={historyOpen}
             />
             {historyOpen && (
               <HistoryPanel

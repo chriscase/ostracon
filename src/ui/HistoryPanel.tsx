@@ -8,7 +8,7 @@
 // mutation. The first/most-recent entry is implicitly "current" and offers
 // no revert button.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCodexGraphqlRequest } from './CodexAdapters';
 import styles from './codex.module.css';
 
@@ -97,6 +97,7 @@ export default function HistoryPanel({
   onClose,
 }: Props) {
   const graphqlRequest = useCodexGraphqlRequest();
+  const panelRef = useRef<HTMLDivElement>(null);
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +132,14 @@ export default function HistoryPanel({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The History button lives in the note header at the top of the main
+  // column, but the panel renders below the full note body — for long
+  // notes that's offscreen, so clicking History appears to do nothing.
+  // Scroll the panel into view on mount so the user sees it open.
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
 
   const active = useMemo(
     () => entries.find((e) => e.sha === activeSha) ?? null,
@@ -179,7 +188,7 @@ export default function HistoryPanel({
   }, [active, path, onReverted, refresh]);
 
   return (
-    <div className={styles.historyPanel}>
+    <div ref={panelRef} className={styles.historyPanel}>
       <div className={styles.historyHeader}>
         <strong>History</strong>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
