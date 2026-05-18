@@ -146,7 +146,7 @@ export default function QuickOpen({ open, onClose }: Props) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search notes by title…"
+          placeholder="Search documents by title…"
           spellCheck={false}
           data-allow-text="true"
         />

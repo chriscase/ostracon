@@ -483,7 +483,7 @@ function NoteTreeItem({
       <a
         href={linkagesHref}
         className={styles.noteRowLinkagesIcon}
-        title="Show this note's link graph (across all folders)"
+        title="Show this document's link graph (across all folders)"
         aria-label="Show linkages"
         onClick={(e) => e.stopPropagation()}
       >

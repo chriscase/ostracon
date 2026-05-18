@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import CodexTree, { type CodexTreeNode, noteHref } from './CodexTree';
 import CodexPreview, { type CodexNote } from './CodexPreview';
 import CodexGraph from './CodexGraph';
-import CodexSearch, { type CodexSearchHit } from './CodexSearch';
 import CodexEditor from './CodexEditor';
 import NewNoteDialog, { defaultNewNoteContent } from './NewNoteDialog';
 import RenameDialog from './RenameDialog';
@@ -169,7 +168,6 @@ export default function CodexBrowser({
   const [loadingTree, setLoadingTree] = useState(true);
   const [loadingNote, setLoadingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchHits, setSearchHits] = useState<CodexSearchHit[] | null>(null);
   const [editing, setEditing] = useState<boolean>(false);
   const [newNoteOpen, setNewNoteOpen] = useState<boolean>(false);
   const [renameTarget, setRenameTarget] = useState<CodexTreeNode | null>(null);
@@ -256,10 +254,6 @@ export default function CodexBrowser({
       cancelled = true;
     };
   }, [view, selectedPath, startInCreate]);
-
-  const onSearchResults = useCallback((hits: CodexSearchHit[] | null) => {
-    setSearchHits(hits);
-  }, []);
 
   const handleRenamed = useCallback(
     async (newPath: string, rewrittenCount: number) => {
@@ -427,7 +421,7 @@ export default function CodexBrowser({
   }, [selectedPath, refreshTree, router, startInCreate]);
 
   // Helper: walk the tree to find the CodexTreeNode for the currently-
-  // selected path, so palette actions like "Rename current note" have a node
+  // selected path, so palette actions like "Rename current document" have a node
   // to operate on.
   const currentNode = useMemo<CodexTreeNode | null>(() => {
     if (!selectedPath || !tree) return null;
@@ -459,7 +453,7 @@ export default function CodexBrowser({
       },
       {
         id: 'quick-open',
-        label: 'Quick open note…',
+        label: 'Quick open document…',
         category: 'Navigation',
         keywords: ['find', 'search', 'jump'],
         run: () => setQuickOpenOpen(true),
@@ -502,22 +496,22 @@ export default function CodexBrowser({
       list.push(
         {
           id: 'rename-current',
-          label: `Rename current note (${currentNode.name})…`,
-          category: 'Note',
+          label: `Rename current document (${currentNode.name})…`,
+          category: 'Document',
           keywords: ['mv', 'move'],
           run: () => setRenameTarget(currentNode),
         },
         {
           id: 'delete-current',
-          label: `Delete current note (${currentNode.name})…`,
-          category: 'Note',
+          label: `Delete current document (${currentNode.name})…`,
+          category: 'Document',
           keywords: ['rm', 'remove'],
           run: () => setDeleteTarget(currentNode),
         },
         {
           id: 'edit-current',
-          label: `Edit current note (${currentNode.name})`,
-          category: 'Note',
+          label: `Edit current document (${currentNode.name})`,
+          category: 'Document',
           run: () => setEditing(true),
         },
       );
@@ -525,16 +519,16 @@ export default function CodexBrowser({
       if (prefs?.pinnedPaths.includes(currentNode.path)) {
         list.push({
           id: 'unpin-current',
-          label: `Unpin current note (${currentNode.name})`,
-          category: 'Note',
+          label: `Unpin current document (${currentNode.name})`,
+          category: 'Document',
           keywords: ['favorite'],
           run: () => void unpinNote(currentNode.path),
         });
       } else {
         list.push({
           id: 'pin-current',
-          label: `Pin current note (${currentNode.name})`,
-          category: 'Note',
+          label: `Pin current document (${currentNode.name})`,
+          category: 'Document',
           keywords: ['favorite', 'star'],
           run: () => void pinNote(currentNode.path),
         });
@@ -591,9 +585,9 @@ export default function CodexBrowser({
   // Register entries for the Cmd+? help dialog.
   useEffect(() => {
     return registerShortcutHelp([
-      { combo: 'mod+s', label: 'Save current note', category: 'Editor' },
+      { combo: 'mod+s', label: 'Save current document', category: 'Editor' },
       { combo: 'mod+k', label: 'Open command palette', category: 'Navigation' },
-      { combo: 'mod+p', label: 'Quick open note', category: 'Navigation' },
+      { combo: 'mod+p', label: 'Quick open document', category: 'Navigation' },
       { combo: 'mod+shift+f', label: 'Find &amp; replace across vault', category: 'Vault' },
       { combo: 'mod+/', label: 'Show this help', category: 'Help' },
       { combo: 'F2', label: 'Rename focused note', category: 'Tree' },
@@ -743,15 +737,13 @@ export default function CodexBrowser({
           </Link>
         </div>
 
-        <CodexSearch onResults={onSearchResults} />
-
         <button
           type="button"
           className={styles.btnPrimary}
           style={{ width: '100%', marginBottom: '0.25rem' }}
           onClick={() => setNewNoteOpen(true)}
         >
-          + New note
+          + New document
         </button>
         <button
           type="button"
@@ -827,55 +819,29 @@ export default function CodexBrowser({
         />
 
         <h3 className={styles.sidebarHeader}>
-          <span>{searchHits === null ? 'AbydosCodex' : 'Search results'}</span>
-          {searchHits === null && tree?.children && (
-            <span style={{ fontWeight: 400 }}>{countNotes(tree)} notes</span>
-          )}
-          {searchHits !== null && (
-            <span style={{ fontWeight: 400 }}>{searchHits.length} hits</span>
+          <span>AbydosCodex</span>
+          {tree?.children && (
+            <span style={{ fontWeight: 400 }}>{countNotes(tree)} documents</span>
           )}
         </h3>
 
-        {searchHits === null ? (
-          loadingTree ? (
-            <div className={styles.spinnerWrap}>Loading vault…</div>
-          ) : (
-            <CodexTree
-              root={tree}
-              selectedPath={selectedPath}
-              onRename={(node) => setRenameTarget(node)}
-              onDelete={(node) => setDeleteTarget(node)}
-              onCreateFolder={(parent) => setNewFolderState({ parent })}
-              onRenameFolder={(node) => setRenameFolderTarget(node)}
-              onDeleteFolder={(node) => setDeleteFolderTarget(node)}
-              onMove={handleMove}
-              multiSelect={{
-                selected: multiSelected,
-                onToggle: handleMultiSelectToggle,
-              }}
-            />
-          )
-        ) : searchHits.length === 0 ? (
-          <div className={styles.spinnerWrap}>No matches</div>
+        {loadingTree ? (
+          <div className={styles.spinnerWrap}>Loading vault…</div>
         ) : (
-          <ul className={styles.searchResultsList}>
-            {searchHits.map((hit) => (
-              <li key={hit.note.path}>
-                <Link
-                  href={noteHref(hit.note.path)}
-                  className={`${styles.searchResultRow} ${
-                    selectedPath === hit.note.path ? styles.noteRowActive : ''
-                  }`}
-                >
-                  <span>{hit.note.title}</span>
-                  <span className={styles.searchResultMeta}>
-                    {hit.note.folder} · {hit.matchedOn}
-                  </span>
-                  {hit.excerpt && <span className={styles.searchResultExcerpt}>{hit.excerpt}</span>}
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <CodexTree
+            root={tree}
+            selectedPath={selectedPath}
+            onRename={(node) => setRenameTarget(node)}
+            onDelete={(node) => setDeleteTarget(node)}
+            onCreateFolder={(parent) => setNewFolderState({ parent })}
+            onRenameFolder={(node) => setRenameFolderTarget(node)}
+            onDeleteFolder={(node) => setDeleteFolderTarget(node)}
+            onMove={handleMove}
+            multiSelect={{
+              selected: multiSelected,
+              onToggle: handleMultiSelectToggle,
+            }}
+          />
         )}
       </aside>
 
@@ -890,7 +856,7 @@ export default function CodexBrowser({
           />
         )}
         {!error && view === 'note' && loadingNote && (
-          <div className={styles.spinnerWrap}>Loading note…</div>
+          <div className={styles.spinnerWrap}>Loading document…</div>
         )}
         {!error && showEditor && selectedPath && (
           <CodexEditor
@@ -935,7 +901,7 @@ export default function CodexBrowser({
           </>
         )}
         {!error && view === 'note' && !loadingNote && !note && !showCreateMode && selectedPath && (
-          <div className={styles.error}>Note not found: {selectedPath}</div>
+          <div className={styles.error}>Document not found: {selectedPath}</div>
         )}
       </main>
 
@@ -1017,8 +983,8 @@ function Welcome() {
       <p>
         The cross-product knowledge vault. Browse by folder on the left, search by title, tag,
         or body content; switch to <Link href="/admin/codex/graph">Graph</Link> for the link
-        map. Click any note to read; click <strong>Edit</strong> in the note header to update
-        it (changes commit + push back to the vault repo).
+        map. Click any document to read; click <strong>Edit</strong> in the document header to
+        update it (changes commit + push back to the vault repo).
       </p>
       <ul>
         <li><strong>20 - Products</strong> — current state of each product</li>

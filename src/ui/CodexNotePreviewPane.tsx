@@ -100,7 +100,7 @@ export default function CodexNotePreviewPane({
             type="button"
             className={styles.notePreviewPaneActionBtn}
             onClick={() => onOpenLinkages(notePath)}
-            title="Open this note's linkages graph (centered on this note)"
+            title="Open this document's linkages graph (centered on this document)"
           >
             🕸
           </button>
@@ -108,7 +108,7 @@ export default function CodexNotePreviewPane({
             type="button"
             className={styles.notePreviewPaneActionBtn}
             onClick={() => onEdit(notePath)}
-            title="Open this note in editor"
+            title="Open this document in editor"
           >
             ✎
           </button>

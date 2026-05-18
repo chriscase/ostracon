@@ -678,7 +678,7 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
                           e.stopPropagation();
                           router.push(linkagesUrl(n.id));
                         }}
-                        title="Pivot the linkages view onto this note"
+                        title="Pivot the linkages view onto this document"
                         aria-label="Pivot linkages"
                       >
                         🕸
@@ -724,7 +724,7 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
                           e.stopPropagation();
                           router.push(linkagesUrl(n.id));
                         }}
-                        title="Pivot the linkages view onto this note"
+                        title="Pivot the linkages view onto this document"
                         aria-label="Pivot linkages"
                       >
                         🕸

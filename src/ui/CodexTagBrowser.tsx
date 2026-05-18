@@ -126,7 +126,7 @@ export default function CodexTagBrowser() {
   async function handleDelete(tagName: string) {
     if (
       !confirm(
-        `Remove tag #${tagName} from every note that uses it? This is one git commit; auto-managed notes are skipped.`,
+        `Remove tag #${tagName} from every document that uses it? This is one git commit; auto-managed documents are skipped.`,
       )
     )
       return;
@@ -210,17 +210,17 @@ export default function CodexTagBrowser() {
         {!active ? (
           <div className={styles.welcome}>
             <h2>Tag browser</h2>
-            <p>Click a tag on the left to see the notes that use it. From there, rename the tag (rewrites every note&apos;s frontmatter) or delete it (removes from every note). Auto-managed notes are skipped by both operations.</p>
+            <p>Click a tag on the left to see the documents that use it. From there, rename the tag (rewrites every document&apos;s frontmatter) or delete it (removes from every document). Auto-managed documents are skipped by both operations.</p>
             <ul>
               <li>Total tags in vault: <strong>{tags.length}</strong></li>
-              <li>Total tagged notes (sum of counts): <strong>{tags.reduce((acc, t) => acc + t.count, 0)}</strong></li>
+              <li>Total tagged documents (sum of counts): <strong>{tags.reduce((acc, t) => acc + t.count, 0)}</strong></li>
             </ul>
           </div>
         ) : (
           <div>
             <div className={styles.noteHeader}>
               <h2 style={{ margin: 0 }}>#{active.tag}</h2>
-              <span className={styles.tagListCount}>{active.count} note{active.count === 1 ? '' : 's'}</span>
+              <span className={styles.tagListCount}>{active.count} document{active.count === 1 ? '' : 's'}</span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
                 <button
                   type="button"

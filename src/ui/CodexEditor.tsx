@@ -348,7 +348,7 @@ export default function CodexEditor({
     <div className={styles.editorRoot}>
       <div className={styles.editorHeader}>
         <div>
-          <strong>{baseSha === null ? 'New note' : 'Editing'}</strong>
+          <strong>{baseSha === null ? 'New document' : 'Editing'}</strong>
           <span className={styles.notePath} style={{ marginLeft: '0.5rem' }}>{path}</span>
         </div>
         <div className={styles.editorActions}>
@@ -367,7 +367,7 @@ export default function CodexEditor({
                   .join('/')
               }
               className={styles.btnSecondary}
-              title="Show this note's link graph (across all folders)"
+              title="Show this document's link graph (across all folders)"
             >
               🕸 Linkages
             </a>
@@ -389,7 +389,7 @@ export default function CodexEditor({
 
       {isAutoManaged && (
         <div className={styles.autoBanner}>
-          This note has an auto-managed Activity section that the nightly journal-mining
+          This document has an auto-managed Activity section that the nightly journal-mining
           script regenerates. Edit safe sections (Sessions, Decisions, Notes) only.
         </div>
       )}
@@ -397,7 +397,7 @@ export default function CodexEditor({
       <input
         type="text"
         className={styles.editorCommitMessage}
-        placeholder="Why? (optional — adds a note to this commit)"
+        placeholder="Why? (optional — adds context to this commit)"
         value={userMessage}
         onChange={(e) => setUserMessage(e.target.value)}
         aria-label="Optional commit reason"
@@ -448,7 +448,7 @@ export default function CodexEditor({
           visibleDragbar={false}
         />
         {dragActive && (
-          <div className={styles.editorDropOverlay}>Drop to attach to this note</div>
+          <div className={styles.editorDropOverlay}>Drop to attach to this document</div>
         )}
       </div>
 
