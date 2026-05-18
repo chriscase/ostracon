@@ -108,10 +108,14 @@ export default function ConceptPopover({
   const { useRouter } = useCodexNavigation();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
-  const [data, setData] = useState<PopoverData | null>(
-    EXCERPT_CACHE.get(path) ?? null,
-  );
-  const [loading, setLoading] = useState(!data);
+  // data/loading/error are all keyed on `path` and resync inside the
+  // effect below — DO NOT initialize from the cache at mount, because
+  // when the parent reuses this instance with a new `path` prop (user
+  // glides from one link to the next without entering the card), the
+  // useState initial value doesn't re-run and `data` would stay stale.
+  // The effect handles both initial-mount + path-change cases.
+  const [data, setData] = useState<PopoverData | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<{
@@ -124,10 +128,24 @@ export default function ConceptPopover({
     setMounted(true);
   }, []);
 
-  // Fetch when no cached value.
+  // Sync data when path changes (including initial mount). Cancel any
+  // in-flight fetch from the previous path so a slow response can't
+  // clobber the new path's state.
   useEffect(() => {
-    if (data) return;
     let cancelled = false;
+    const cached = EXCERPT_CACHE.get(path);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+      setError(null);
+      // Reset position so it re-measures against the new anchor.
+      setPosition(null);
+      return;
+    }
+    setData(null);
+    setLoading(true);
+    setError(null);
+    setPosition(null);
     (async () => {
       try {
         const { data: payload, errors } = await graphqlRequest<{
@@ -167,7 +185,7 @@ export default function ConceptPopover({
     return () => {
       cancelled = true;
     };
-  }, [path, data, graphqlRequest]);
+  }, [path, graphqlRequest]);
 
   // Desktop positioning — runs once anchor + card are both available.
   useEffect(() => {
