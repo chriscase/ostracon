@@ -131,10 +131,12 @@ export const codexMutationFields: Record<
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      // Compute the post-injection UUID up front so the commit message
-      // carries the Note-UUID trailer. saveNote will idempotently re-run
-      // ensureNoteUuid internally; the only cost is one extra parse.
-      const { uuid } = ensureNoteUuid(args.content as string);
+      // Pre-inject the UUID so the resolver and saveNote agree on the
+      // value. Passing the already-injected content to saveNote makes
+      // its internal ensureNoteUuid call a no-op (the uuid is already
+      // there) — so the commit-message trailer matches what lands on
+      // disk.
+      const { content: contentWithUuid, uuid } = ensureNoteUuid(args.content as string);
       const message = commitMessageFor(
         args.commitMessage as string | undefined,
         args.userMessage as string | undefined,
@@ -144,7 +146,7 @@ export const codexMutationFields: Record<
 
       const outcome = await saveNote({
         path: args.path as string,
-        content: args.content as string,
+        content: contentWithUuid,
         baseSha: args.baseSha as string,
         author: authorFromUser(user),
         commitMessage: message,
@@ -166,7 +168,7 @@ export const codexMutationFields: Record<
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const { uuid } = ensureNoteUuid(args.content as string);
+      const { content: contentWithUuid, uuid } = ensureNoteUuid(args.content as string);
       const message = commitMessageFor(
         args.commitMessage as string | undefined,
         args.userMessage as string | undefined,
@@ -176,7 +178,7 @@ export const codexMutationFields: Record<
 
       const outcome = await saveNote({
         path: args.path as string,
-        content: args.content as string,
+        content: contentWithUuid,
         baseSha: null,
         author: authorFromUser(user),
         commitMessage: message,
