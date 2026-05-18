@@ -50,8 +50,11 @@ export {
 export {
   default as ConceptPopover,
   PreviewLink,
+  useConceptPopoverDelegation,
   type ConceptPopoverProps,
   type PreviewLinkProps,
+  type DelegationProps,
+  type DelegationState,
 } from './ConceptPopover';
 export { default as CommandPalette, type PaletteAction } from './CommandPalette';
 export { default as QuickOpen } from './QuickOpen';
