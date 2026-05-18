@@ -2240,6 +2240,9 @@
   gap: 0.6rem;
   padding: 0.85rem 1rem 0.7rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  /* Don't let the flex column compress this row when results push the
+   * available space — chips/input would clip otherwise. */
+  flex-shrink: 0;
 }
 
 .paletteSearchIcon {
@@ -2295,12 +2298,17 @@
 
 .paletteModeRow {
   display: flex;
+  align-items: center;
   gap: 0.4rem;
   padding: 0.55rem 1rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   overflow-x: auto;
+  overflow-y: visible;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  /* Same flex-shrink: 0 reason as .paletteSearchRow — otherwise chips
+   * clip vertically when results expand. */
+  flex-shrink: 0;
 }
 
 .paletteModeRow::-webkit-scrollbar { display: none; }
@@ -2333,7 +2341,12 @@
 }
 
 .paletteResults {
-  flex: 1;
+  flex: 1 1 auto;
+  /* min-height: 0 is essential — without it, flex items default to
+   * min-height: auto which prevents scroll containers from shrinking
+   * below their content. The non-scrolling chrome (header/modes/footer)
+   * stays full-size; this pane absorbs the remainder and scrolls. */
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 0.4rem 0;
@@ -2537,6 +2550,7 @@
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   font-size: 0.72rem;
   color: var(--text-tertiary, rgba(255, 255, 255, 0.45));
+  flex-shrink: 0;
 }
 
 .paletteFooter kbd {
