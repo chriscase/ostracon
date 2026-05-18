@@ -218,20 +218,21 @@ export default function HistoryPanel({
                 className={`${styles.historyItem} ${isActive ? styles.historyItemActive : ''}`}
                 onClick={() => setActiveSha(entry.sha)}
               >
-                <div>
-                  <strong>{entry.message.split('\n')[0]}</strong>
+                <div className={styles.historyItemHeader}>
+                  <AuthorChip
+                    name={entry.authorName}
+                    email={entry.authorEmail}
+                    title={`${entry.authorName} <${entry.authorEmail}>`}
+                  />
+                  <strong className={styles.historyItemSubject}>
+                    {entry.message.split('\n')[0]}
+                  </strong>
                   {isHead && (
-                    <span
-                      className={styles.frontmatterCollapsedBadge}
-                      style={{ marginLeft: '0.5rem' }}
-                    >
-                      current
-                    </span>
+                    <span className={styles.historyCurrentBadge}>current</span>
                   )}
                 </div>
                 <div className={styles.historyMeta}>
                   <span className={styles.historyShortSha}>{entry.shortSha}</span>
-                  <span>{entry.authorName}</span>
                   <span>{formatDate(entry.date)}</span>
                 </div>
               </li>
@@ -243,7 +244,12 @@ export default function HistoryPanel({
       {active && (
         <div>
           <div className={styles.historyHeader} style={{ marginTop: '0.75rem' }}>
-            <div>
+            <div className={styles.historyActiveHeader}>
+              <AuthorChip
+                name={active.authorName}
+                email={active.authorEmail}
+                title={`${active.authorName} <${active.authorEmail}>`}
+              />
               <strong>{active.shortSha}</strong>
               <span className={styles.historyMeta} style={{ display: 'inline', marginLeft: '0.5rem' }}>
                 {active.authorName} · {formatDate(active.date)}
@@ -270,4 +276,50 @@ export default function HistoryPanel({
       )}
     </div>
   );
+}
+
+/** Visual chip with the committer's initials in a colored disc + their
+ *  display name. Disc color is stable per email so the same author always
+ *  shows the same hue in the History list. */
+function AuthorChip({
+  name,
+  email,
+  title,
+}: {
+  name: string;
+  email: string;
+  title?: string;
+}) {
+  const initials = authorInitials(name, email);
+  const hue = stableHueFromString(email || name);
+  return (
+    <span className={styles.authorChip} title={title}>
+      <span
+        className={styles.authorChipAvatar}
+        style={{
+          background: `hsl(${hue} 65% 32%)`,
+          color: `hsl(${hue} 80% 92%)`,
+        }}
+        aria-hidden="true"
+      >
+        {initials}
+      </span>
+      <span className={styles.authorChipName}>{name}</span>
+    </span>
+  );
+}
+
+function authorInitials(name: string, email: string): string {
+  const source = (name || email.split('@')[0] || '?').trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return source.slice(0, 2).toUpperCase();
+}
+
+function stableHueFromString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
 }

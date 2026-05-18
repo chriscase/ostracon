@@ -64,8 +64,8 @@ const MDEditor = dynamic(
 );
 
 const SAVE_NOTE = `
-  mutation SaveNote($path: String!, $content: String!, $baseSha: String!, $commitMessage: String) {
-    saveNote(path: $path, content: $content, baseSha: $baseSha, commitMessage: $commitMessage) {
+  mutation SaveNote($path: String!, $content: String!, $baseSha: String!, $userMessage: String) {
+    saveNote(path: $path, content: $content, baseSha: $baseSha, userMessage: $userMessage) {
       kind
       newSha
       commitSha
@@ -82,8 +82,8 @@ const SAVE_NOTE = `
 `;
 
 const CREATE_NOTE = `
-  mutation CreateNote($path: String!, $content: String!, $commitMessage: String) {
-    createNote(path: $path, content: $content, commitMessage: $commitMessage) {
+  mutation CreateNote($path: String!, $content: String!, $userMessage: String) {
+    createNote(path: $path, content: $content, userMessage: $userMessage) {
       kind
       newSha
       commitSha
@@ -144,7 +144,7 @@ export default function CodexEditor({
   const initialParsed = useMemo(() => parseNote(initialContent), [initialContent]);
   const [frontmatter, setFrontmatter] = useState<Frontmatter>(initialParsed.data);
   const [body, setBody] = useState<string>(initialParsed.content);
-  const [commitMessage, setCommitMessage] = useState<string>('');
+  const [userMessage, setUserMessage] = useState<string>('');
   const [toast, setToast] = useState<ToastState>({ kind: 'idle' });
   const [frontmatterCollapsed, setFrontmatterCollapsed] = useState<boolean>(false);
   // currentBaseSha tracks the latest SHA the server has confirmed — bumped after
@@ -162,7 +162,7 @@ export default function CodexEditor({
     setFrontmatter(initialParsed.data);
     setBody(initialParsed.content);
     setCurrentBaseSha(baseSha);
-    setCommitMessage('');
+    setUserMessage('');
     setToast({ kind: 'idle' });
     setFrontmatterCollapsed(false);
   }, [path, initialParsed, baseSha]);
@@ -188,7 +188,7 @@ export default function CodexEditor({
       const variables: Record<string, unknown> = {
         path,
         content,
-        commitMessage: commitMessage.trim() || undefined,
+        userMessage: userMessage.trim() || undefined,
       };
       if (!isCreate) variables.baseSha = currentBaseSha;
 
@@ -397,9 +397,10 @@ export default function CodexEditor({
       <input
         type="text"
         className={styles.editorCommitMessage}
-        placeholder={`Commit message (default: "Edit ${path} via admin panel")`}
-        value={commitMessage}
-        onChange={(e) => setCommitMessage(e.target.value)}
+        placeholder="Why? (optional — adds a note to this commit)"
+        value={userMessage}
+        onChange={(e) => setUserMessage(e.target.value)}
+        aria-label="Optional commit reason"
       />
 
       <FrontmatterForm
