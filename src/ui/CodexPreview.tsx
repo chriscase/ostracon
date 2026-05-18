@@ -7,6 +7,7 @@ import rehypeSlug from 'rehype-slug';
 import rehypeAutolinkHeadings from 'rehype-autolink-headings';
 import { useCodexNavigation } from './CodexAdapters';
 import { noteHref } from './CodexTree';
+import { PreviewLink } from './ConceptPopover';
 import styles from './codex.module.css';
 
 export interface CodexResolvedLink {
@@ -220,6 +221,7 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'wrap' }]]}
+          components={{ a: PreviewLink }}
         >
           {md}
         </ReactMarkdown>
