@@ -466,7 +466,14 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
     sigma.refresh();
   }, [search, folderFilter, hoveredId]);
 
-  if (isMobile) return <MobileFallback />;
+  if (isMobile)
+    return (
+      <MobileFallback
+        scope={scope}
+        noteFocus={noteFocus}
+        noteFocusDepth={noteFocusDepth}
+      />
+    );
   if (error) return <div className={styles.error}>{error}</div>;
   if (!data) return <div className={styles.spinnerWrap}>Loading graph…</div>;
 
@@ -946,27 +953,94 @@ function nodeSize(n: CodexGraphNode): number {
   return Math.max(3, Math.min(20, Math.sqrt(n.pageRank * 4500)));
 }
 
-function MobileFallback() {
+// ─── Mobile fallback ─────────────────────────────────────────────────────────
+//
+// Sigma's WebGL canvas + force-directed layout is poor at <= 768px (labels
+// unreadable, pan/zoom fights browser scroll, FPS drops). Instead we render
+// the same information as a touch-friendly ranked list. Behavior matches the
+// three desktop graph views:
+//
+//   • Full vault (no scope, no noteFocus): top folders by influence — tap
+//     drills into the folder.
+//   • Folder scope: notes in the folder ranked by influence — tap opens the
+//     note's linkages page.
+//   • Note focus (linkages): connected notes grouped by hop distance — same
+//     content as the desktop side panel, tap pivots onto another note.
+
+interface MobileFallbackProps {
+  scope?: string | null;
+  noteFocus?: string;
+  noteFocusDepth?: number;
+}
+
+interface MobileGraphRow {
+  id: string;
+  label: string;
+  folder: string;
+  pageRank: number;
+  distance?: number | null;
+  noteCount?: number | null;
+}
+
+function MobileFallback({ scope, noteFocus, noteFocusDepth = 2 }: MobileFallbackProps) {
   const graphqlRequest = useCodexGraphqlRequest();
-  const [hits, setHits] = useState<Array<{ id: string; label: string; pageRank: number }>>([]);
+  const { useRouter: useNavRouter } = useCodexNavigation();
+  const router = useNavRouter();
+  const [rows, setRows] = useState<MobileGraphRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
+
     (async () => {
       try {
-        const { data, errors } = await graphqlRequest<{
-          vaultGraph: { nodes: Array<{ id: string; label: string; pageRank: number }> };
-        }>(TOP_NOTES_QUERY);
-        if (cancelled) return;
-        if (errors?.length) {
-          setError(errors.map((e) => e.message).join('; '));
+        if (noteFocus) {
+          const { data, errors } = await graphqlRequest<{
+            vaultNoteNeighborhood: CodexGraphPayload;
+          }>(NOTE_NEIGHBORHOOD_QUERY, { notePath: noteFocus, depth: noteFocusDepth });
+          if (cancelled) return;
+          if (errors?.length) {
+            setError(errors.map((e) => e.message).join('; '));
+          } else {
+            const nodes = data?.vaultNoteNeighborhood.nodes ?? [];
+            setRows(
+              nodes
+                .filter((n) => n.id !== noteFocus) // exclude focus node itself
+                .sort(byDistanceThenLabel)
+                .map((n) => ({
+                  id: n.id,
+                  label: n.label,
+                  folder: n.folder,
+                  pageRank: n.pageRank,
+                  distance: n.distance,
+                })),
+            );
+          }
         } else {
-          const sorted = (data?.vaultGraph.nodes ?? [])
-            .slice()
-            .sort((a, b) => b.pageRank - a.pageRank);
-          setHits(sorted);
+          const { data, errors } = await graphqlRequest<{
+            vaultGraph: CodexGraphPayload;
+          }>(GRAPH_QUERY, { scope: scope ?? null });
+          if (cancelled) return;
+          if (errors?.length) {
+            setError(errors.map((e) => e.message).join('; '));
+          } else {
+            const nodes = data?.vaultGraph.nodes ?? [];
+            setRows(
+              nodes
+                .slice()
+                .sort((a, b) => b.pageRank - a.pageRank)
+                .map((n) => ({
+                  id: n.id,
+                  label: n.label,
+                  folder: n.folder,
+                  pageRank: n.pageRank,
+                  noteCount: n.noteCount,
+                })),
+            );
+          }
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load');
@@ -974,29 +1048,132 @@ function MobileFallback() {
         if (!cancelled) setLoading(false);
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [scope, noteFocus, noteFocusDepth]);
+
+  const onTap = useCallback(
+    (row: MobileGraphRow) => {
+      if (noteFocus || scope) {
+        // Note-level row → open its linkages page.
+        const url =
+          '/admin/codex/graph/note/' +
+          row.id
+            .replace(/\.md$/i, '')
+            .split(/[\\/]/g)
+            .map((seg) => encodeURIComponent(seg))
+            .join('/');
+        router.push(url);
+      } else {
+        // Folder-level row → drill into that folder's graph.
+        router.push(`/admin/codex/graph?scope=${encodeURIComponent(row.id)}`);
+      }
+    },
+    [noteFocus, scope, router],
+  );
 
   if (loading) return <div className={styles.spinnerWrap}>Loading…</div>;
   if (error) return <div className={styles.error}>{error}</div>;
 
+  // Group note-focus rows by hop distance ("Direct" / "Further out").
+  const directConnections = noteFocus ? rows.filter((r) => (r.distance ?? 0) === 1) : [];
+  const widerConnections = noteFocus ? rows.filter((r) => (r.distance ?? 0) >= 2) : [];
+
+  const focusLabel = noteFocus ? noteFocus.split('/').pop()?.replace(/\.md$/i, '') ?? noteFocus : '';
+
   return (
     <div className={styles.mobileGraphFallback}>
-      <h3>Top folders by influence</h3>
-      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-        The interactive graph is hidden on small screens. Open this page on a wider viewport
-        to explore the link graph visually.
-      </p>
-      <ul className={styles.mobileFolderList}>
-        {hits.map((h) => (
-          <li key={h.id}>
-            <strong>{h.label}</strong>
-            <span className={styles.notePath}>influence {(h.pageRank * 100).toFixed(2)}</span>
+      {noteFocus ? (
+        <>
+          <h3>Linkages from {focusLabel}</h3>
+          <p className={styles.mobileGraphSubtitle}>
+            {rows.length} connected · depth {noteFocusDepth}
+          </p>
+          {directConnections.length > 0 && (
+            <MobileRowSection
+              heading="Direct connections"
+              rows={directConnections}
+              onTap={onTap}
+            />
+          )}
+          {widerConnections.length > 0 && (
+            <MobileRowSection
+              heading="Further out"
+              rows={widerConnections}
+              onTap={onTap}
+            />
+          )}
+          {rows.length === 0 && (
+            <p className={styles.mobileGraphSubtitle}>
+              No linkages at this depth.
+            </p>
+          )}
+        </>
+      ) : scope ? (
+        <>
+          <h3>{scope}</h3>
+          <p className={styles.mobileGraphSubtitle}>
+            {rows.length} note{rows.length === 1 ? '' : 's'} · tap to view linkages
+          </p>
+          <MobileRowSection rows={rows} onTap={onTap} />
+        </>
+      ) : (
+        <>
+          <h3>Top folders by influence</h3>
+          <p className={styles.mobileGraphSubtitle}>Tap a folder to drill in</p>
+          <MobileRowSection rows={rows} onTap={onTap} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function MobileRowSection({
+  heading,
+  rows,
+  onTap,
+}: {
+  heading?: string;
+  rows: MobileGraphRow[];
+  onTap: (row: MobileGraphRow) => void;
+}) {
+  return (
+    <section className={styles.mobileGraphSection}>
+      {heading && (
+        <h4 className={styles.mobileGraphSectionHeading}>
+          {heading} <span className={styles.mobileGraphSectionCount}>{rows.length}</span>
+        </h4>
+      )}
+      <ul className={styles.mobileGraphList}>
+        {rows.map((row) => (
+          <li key={row.id}>
+            <button
+              type="button"
+              className={styles.mobileGraphRow}
+              onClick={() => onTap(row)}
+            >
+              <span className={styles.mobileGraphRowLabel}>{row.label}</span>
+              <span className={styles.mobileGraphRowMeta}>
+                {row.distance !== undefined
+                  ? `${row.distance} hop${row.distance === 1 ? '' : 's'}`
+                  : row.noteCount !== undefined
+                  ? `${row.noteCount} notes`
+                  : row.folder
+                  ? row.folder.replace(/^\d+\s*-\s*/, '')
+                  : ''}
+              </span>
+              <span className={styles.mobileGraphRowChevron} aria-hidden="true">›</span>
+            </button>
           </li>
         ))}
       </ul>
-    </div>
+    </section>
   );
+}
+
+function byDistanceThenLabel(a: CodexGraphNode, b: CodexGraphNode): number {
+  const d = (a.distance ?? 0) - (b.distance ?? 0);
+  return d !== 0 ? d : a.label.localeCompare(b.label);
 }
