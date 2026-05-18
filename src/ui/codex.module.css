@@ -1689,10 +1689,81 @@
 
 .historyItem {
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
   font-size: 0.85rem;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+
+.historyItem:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.historyItemHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.historyItemSubject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.historyCurrentBadge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(120, 200, 255, 0.18);
+  color: rgb(180, 220, 255);
+  border: 1px solid rgba(120, 200, 255, 0.4);
+}
+
+.historyActiveHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* Author chip — avatar disc with initials + display name. Color is
+   deterministic from the author's email so the same person always shows
+   the same hue in the history list. */
+.authorChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.authorChipAvatar {
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex: 0 0 auto;
+}
+
+.authorChipName {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .historyItemActive {
