@@ -38,6 +38,7 @@ import {
   CodexNoteSummaryType,
   CodexGraphType,
   CodexSearchHitType,
+  CodexSearchModeEnum,
   CodexHistoryEntryType,
   CodexPreviewResultType,
   CodexTagSummaryType,
@@ -164,18 +165,66 @@ export const codexQueryFields: Record<
 
   vaultSearch: {
     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(CodexSearchHitType))),
-    description: 'Substring + tag search across the vault index.',
+    description:
+      'Search the vault. When the host has registered a SearchAdapter on context.codexSearch (e.g. a Postgres tsvector or pgvector backend), the resolver delegates to it; otherwise falls through to the in-memory default (substring + tag match).',
     args: {
       query: { type: new GraphQLNonNull(GraphQLString) },
       limit: { type: GraphQLInt },
+      /** Restrict to notes whose path starts with this prefix. Host
+       *  adapters honor this; the in-memory default ignores it. */
+      folder: { type: GraphQLString },
+      /** Restrict to notes carrying any of these tags. Host adapters
+       *  honor this; the in-memory default ignores it. */
+      tags: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
+      /** Restrict to notes with this status frontmatter value. */
+      status: { type: GraphQLString },
+      /** Search mode: substring / fulltext / semantic / hybrid. The
+       *  in-memory default treats anything but 'substring' as substring.
+       *  Hosts pick the best fit per mode. */
+      mode: { type: CodexSearchModeEnum },
     },
     resolve: async (_parent, args, context) => {
       await requireCodexPermission(context, 'codex.read');
-      const hits = await searchVault(args.query as string, (args.limit as number | undefined) ?? 20);
+      const query = args.query as string;
+      const limit = (args.limit as number | undefined) ?? 20;
+      const folder = args.folder as string | undefined;
+      const tags = args.tags as string[] | undefined;
+      const status = args.status as string | undefined;
+      const mode = args.mode as
+        | 'substring'
+        | 'fulltext'
+        | 'semantic'
+        | 'hybrid'
+        | undefined;
+
+      // When the host has registered a SearchAdapter, delegate. The
+      // adapter handles ranking, mode selection, and filter semantics.
+      if (context.codexSearch) {
+        const hits = await context.codexSearch.search({
+          q: query,
+          limit,
+          folder,
+          tags,
+          status,
+          mode,
+        });
+        return hits.map((h) => ({
+          note: summarize(h.meta),
+          score: h.score,
+          matchedOn: h.matchedOn,
+          excerpt: h.excerpt,
+        }));
+      }
+
+      // No adapter — fall back to the in-memory default. It only
+      // implements substring + tag match; folder/tags/status/mode args
+      // are silently ignored.
+      const hits = await searchVault(query, limit);
       return hits.map((h) => ({
         note: summarize(h.meta),
         score: h.score,
         matchedOn: h.matchedOn,
+        excerpt: h.excerpt,
       }));
     },
   },

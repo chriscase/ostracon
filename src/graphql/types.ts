@@ -133,6 +133,23 @@ export const CodexSearchHitMatchEnum = new GraphQLEnumType({
     tag: { value: 'tag' },
     path: { value: 'path' },
     body: { value: 'body' },
+    /** Frontmatter alias matched (host adapters that index aliases). */
+    alias: { value: 'alias' },
+    /** Embedding-similarity hit (semantic search mode). */
+    semantic: { value: 'semantic' },
+  },
+});
+
+/** Search mode the resolver passes through to the host adapter. The
+ *  in-memory default ignores anything other than 'substring' and treats
+ *  unknown modes as substring. */
+export const CodexSearchModeEnum = new GraphQLEnumType({
+  name: 'CodexSearchMode',
+  values: {
+    substring: { value: 'substring' },
+    fulltext: { value: 'fulltext' },
+    semantic: { value: 'semantic' },
+    hybrid: { value: 'hybrid' },
   },
 });
 
