@@ -711,6 +711,46 @@ export default function CodexBrowser({
 
   const titleFromPath = (rel: string) => rel.split('/').pop()?.replace(/\.md$/, '') ?? 'New note';
 
+  // ─── Stable handlers for CodexTree ────────────────────────────────────
+  // The tree is one of the most expensive children to re-render at corpus
+  // scale; React.memo on the export below makes that conditional on prop
+  // equality, but that only works if every prop is stable. These
+  // useCallback wrappers replace inline arrow functions that would have
+  // defeated the memoization otherwise.
+  const onTreeRename = useCallback(
+    (node: CodexTreeNode) => setRenameTarget(node),
+    [],
+  );
+  const onTreeDelete = useCallback(
+    (node: CodexTreeNode) => setDeleteTarget(node),
+    [],
+  );
+  const onTreeCreateFolder = useCallback(
+    (parent: CodexTreeNode | null) => setNewFolderState({ parent }),
+    [],
+  );
+  const onTreeRenameFolder = useCallback(
+    (node: CodexTreeNode) => setRenameFolderTarget(node),
+    [],
+  );
+  const onTreeDeleteFolder = useCallback(
+    (node: CodexTreeNode) => setDeleteFolderTarget(node),
+    [],
+  );
+  // Memoized container — without this, a new `{ selected, onToggle }` object
+  // every render would defeat CodexTree's prop-equality check.
+  const treeMultiSelect = useMemo(
+    () => ({ selected: multiSelected, onToggle: handleMultiSelectToggle }),
+    [multiSelected, handleMultiSelectToggle],
+  );
+
+  // Same pattern for the preview's inline handlers.
+  const onPreviewEdit = useCallback(() => setEditing(true), []);
+  const onPreviewShowHistory = useCallback(
+    () => setHistoryOpen((v) => !v),
+    [],
+  );
+
   return (
     // data-view drives the mobile sidebar visibility rule in codex.module.css
     // — on narrow screens, the sidebar gets `display: none` when view='note'
@@ -831,16 +871,13 @@ export default function CodexBrowser({
           <CodexTree
             root={tree}
             selectedPath={selectedPath}
-            onRename={(node) => setRenameTarget(node)}
-            onDelete={(node) => setDeleteTarget(node)}
-            onCreateFolder={(parent) => setNewFolderState({ parent })}
-            onRenameFolder={(node) => setRenameFolderTarget(node)}
-            onDeleteFolder={(node) => setDeleteFolderTarget(node)}
+            onRename={onTreeRename}
+            onDelete={onTreeDelete}
+            onCreateFolder={onTreeCreateFolder}
+            onRenameFolder={onTreeRenameFolder}
+            onDeleteFolder={onTreeDeleteFolder}
             onMove={handleMove}
-            multiSelect={{
-              selected: multiSelected,
-              onToggle: handleMultiSelectToggle,
-            }}
+            multiSelect={treeMultiSelect}
           />
         )}
       </aside>
@@ -876,8 +913,8 @@ export default function CodexBrowser({
             <CodexPreview
               note={note}
               canEdit
-              onEdit={() => setEditing(true)}
-              onShowHistory={() => setHistoryOpen((v) => !v)}
+              onEdit={onPreviewEdit}
+              onShowHistory={onPreviewShowHistory}
               historyOpen={historyOpen}
             />
             {historyOpen && (
