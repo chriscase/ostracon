@@ -150,6 +150,8 @@ export const codexMutationFields: Record<
         baseSha: args.baseSha as string,
         author: authorFromUser(user),
         commitMessage: message,
+        events: context.codexEvents,
+        user,
       });
       return outcomeToPayload(outcome);
     },
@@ -182,6 +184,8 @@ export const codexMutationFields: Record<
         baseSha: null,
         author: authorFromUser(user),
         commitMessage: message,
+        events: context.codexEvents,
+        user,
       });
       return outcomeToPayload(outcome);
     },
@@ -216,6 +220,8 @@ export const codexMutationFields: Record<
         newPath,
         author: authorFromUser(user),
         commitMessage: message,
+        events: context.codexEvents,
+        user,
       });
       return renameOutcomeToPayload(outcome);
     },
@@ -247,6 +253,8 @@ export const codexMutationFields: Record<
         path: targetPath,
         author: authorFromUser(user),
         commitMessage: message,
+        events: context.codexEvents,
+        user,
       });
       return deleteOutcomeToPayload(outcome);
     },

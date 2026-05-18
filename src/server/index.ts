@@ -41,6 +41,10 @@ export * from './user-prefs';
 export * from './config';
 export * from './uuid';
 export * from './commit-format';
+export * from './event-adapter';
+export * from './search-adapter';
+export * from './embeddings-adapter';
+export * from './annotation-adapter';
 export {
   getFileHistory,
   readFileAtSha,

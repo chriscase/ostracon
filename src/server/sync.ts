@@ -43,6 +43,8 @@ import {
 } from './config';
 import { parseNote, serializeNote, type Frontmatter } from './frontmatter';
 import { generateUuidV7, isValidUuid } from './uuid';
+import type { EventAdapter } from './event-adapter';
+import type { CodexUser } from './auth-adapter';
 
 /**
  * Ensure the content carries a frontmatter `uuid:` field. If absent, inject
@@ -86,6 +88,14 @@ export interface SaveOptions {
   author: { name: string; email: string };
   /** Commit message — caller supplies (e.g. "Edit NexaDeck.md via admin panel"). */
   commitMessage: string;
+  /** Optional event adapter — receives a `note.saved` or `note.created`
+   *  event after a successful commit. Hosts use this to drive search-
+   *  index updates, audit log, etc. without polling. */
+  events?: EventAdapter;
+  /** The CodexUser who triggered the save. Used as the `author` field in
+   *  emitted events. When omitted, the event's `author.email` is derived
+   *  from `opts.author.email` (less expressive but functional). */
+  user?: CodexUser;
 }
 
 // Single mutex for all vault writes. Implemented as a promise chain.
@@ -181,8 +191,30 @@ export async function saveNote(opts: SaveOptions): Promise<SaveOutcome> {
     invalidatePageRank();
     schedulePush();
 
+    // Emit AFTER index invalidation so any listener that pulls the freshly-
+    // saved meta sees the committed state. Re-parse the final content for
+    // the uuid (cheap — it's the file we just wrote).
+    const { uuid: writtenUuid } = ensureNoteUuid(finalContent);
+    const eventKind: 'note.saved' | 'note.created' = exists ? 'note.saved' : 'note.created';
+    await opts.events?.emit({
+      kind: eventKind,
+      uuid: writtenUuid,
+      path: opts.path,
+      commitSha: commit.sha,
+      author: opts.user ?? authorAsCodexUser(opts.author),
+    });
+
     return { kind: 'OK', newSha, commitSha: commit.sha };
   });
+}
+
+/** Map a `{ name, email }` git-author pair back to a minimal CodexUser
+ *  shape — used when callers don't pass a separate `user` field on the
+ *  options. The id falls back to the email so downstream consumers can
+ *  still key on something stable; hosts that want per-user analytics
+ *  should pass the real `user`. */
+function authorAsCodexUser(author: { name: string; email: string }): CodexUser {
+  return { id: author.email, name: author.name, email: author.email };
 }
 
 // ─── UUID backfill ────────────────────────────────────────────────────────
@@ -308,6 +340,8 @@ export interface RenameOptions {
   newPath: string;
   author: { name: string; email: string };
   commitMessage: string;
+  events?: EventAdapter;
+  user?: CodexUser;
 }
 
 function normalizedFormsOfPath(p: string): {
@@ -404,6 +438,7 @@ export async function renameNote(opts: RenameOptions): Promise<RenameOutcome> {
     // and pre-compute the rewritten content. Done BEFORE the rename so the
     // index is still keyed on oldPath.
     const idx = await getIndex();
+    const renamedUuid = idx.files.get(oldPath)?.uuid;
     const rewrites: Array<{ path: string; content: string }> = [];
     for (const [notePath, meta] of idx.files) {
       if (notePath === oldPath) continue;
@@ -444,6 +479,15 @@ export async function renameNote(opts: RenameOptions): Promise<RenameOutcome> {
     invalidatePageRank();
     schedulePush();
 
+    await opts.events?.emit({
+      kind: 'note.renamed',
+      uuid: renamedUuid,
+      oldPath,
+      newPath,
+      commitSha: commit.sha,
+      author: opts.user ?? authorAsCodexUser(opts.author),
+    });
+
     return {
       kind: 'OK',
       newPath,
@@ -465,6 +509,8 @@ export interface DeleteOptions {
   path: string;
   author: { name: string; email: string };
   commitMessage: string;
+  events?: EventAdapter;
+  user?: CodexUser;
 }
 
 /**
@@ -506,6 +552,7 @@ export async function deleteNote(opts: DeleteOptions): Promise<DeleteOutcome> {
     // (wikilinks that resolve to nothing). Use the in-memory index BEFORE
     // the delete so the link table is still keyed correctly.
     const idx = await getIndex();
+    const deletedUuid = idx.files.get(rel)?.uuid;
     const orphanedFiles: string[] = [];
     for (const [notePath, meta] of idx.files) {
       if (notePath === rel) continue;
@@ -529,6 +576,14 @@ export async function deleteNote(opts: DeleteOptions): Promise<DeleteOutcome> {
     invalidateIndex();
     invalidatePageRank();
     schedulePush();
+
+    await opts.events?.emit({
+      kind: 'note.deleted',
+      uuid: deletedUuid,
+      path: rel,
+      commitSha: commit.sha,
+      author: opts.user ?? authorAsCodexUser(opts.author),
+    });
 
     return {
       kind: 'OK',
