@@ -2831,3 +2831,132 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ─── Reading mode (two-pane document + references rail) ────────────── */
+
+/* Single-column fallback when the rail is off — keeps the body
+   inheriting the natural .markdown / .inboundLinks layout, no flex. */
+.readingModeLayoutSingle {
+  display: block;
+}
+
+/* Two-column layout active. On desktop the rail sits to the right of
+   the body; on phones / narrow tablets it stacks below the body. */
+.readingModeLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) min(360px, 36%);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.readingModeBody {
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  .readingModeLayout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+}
+
+/* Reference rail */
+.referencesRail {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+}
+
+@media (max-width: 960px) {
+  .referencesRail {
+    position: static;
+    max-height: none;
+  }
+}
+
+.referencesRailHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.referencesRailTitle {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.65));
+}
+
+.referencesRailCount {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(120, 200, 255, 0.14);
+  color: rgb(180, 220, 255);
+  border: 1px solid rgba(120, 200, 255, 0.32);
+  font-weight: 600;
+}
+
+.referencesRailHint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.45));
+  line-height: 1.4;
+}
+
+.referencesList {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.referencesCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.015);
+  color: var(--text-primary, white);
+  text-decoration: none;
+  transition: background 100ms ease, border-color 100ms ease, transform 100ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.referencesCard:hover,
+.referencesCard:focus-visible {
+  background: rgba(120, 200, 255, 0.06);
+  border-color: rgba(120, 200, 255, 0.3);
+  outline: none;
+}
+
+.referencesCard:active {
+  transform: translateY(1px);
+}
+
+.referencesCardTitle {
+  font-weight: 600;
+  font-size: 0.88rem;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.referencesCardFolder {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.68rem;
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.45));
+}
