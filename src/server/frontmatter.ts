@@ -12,6 +12,11 @@ export interface Frontmatter {
   created?: string;
   aliases?: string[];
   related?: string[];
+  /** Stable note identifier — injected by saveNote when missing, survives
+   *  renames/moves. Anchor for DB-backed features (comments, annotations,
+   *  embeddings, audit log). v7 UUID by default; existing values preserved
+   *  on round-trip even if they aren't v7. */
+  uuid?: string;
   // Auto-managed fields written by _scripts/nightly-journal.py
   last_mined?: string;
   [key: string]: unknown;

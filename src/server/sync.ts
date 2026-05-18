@@ -41,6 +41,24 @@ import {
   getMaxUploadBytes,
   getAllowedAttachmentExts,
 } from './config';
+import { parseNote, serializeNote, type Frontmatter } from './frontmatter';
+import { generateUuidV7, isValidUuid } from './uuid';
+
+/**
+ * Ensure the content carries a frontmatter `uuid:` field. If absent, inject
+ * a fresh v7 UUID and re-serialize. Idempotent — content that already has
+ * a valid UUID round-trips unchanged.
+ *
+ * Used by saveNote and friends so every committed note carries a stable
+ * identifier from its first write. Anchors comments, annotations,
+ * embeddings, audit-log entries.
+ */
+function ensureNoteUuid(content: string): string {
+  const parsed = parseNote(content);
+  if (isValidUuid(parsed.data.uuid)) return content;
+  parsed.data.uuid = generateUuidV7();
+  return serializeNote(parsed.data, parsed.content);
+}
 
 export type SaveOutcome =
   | { kind: 'OK'; newSha: string; commitSha: string }
@@ -111,7 +129,13 @@ export async function saveNote(opts: SaveOptions): Promise<SaveOutcome> {
       return { kind: 'AUTO_MANAGED', reason: 'This file is managed by the nightly-journal automation. Edit safe sections only.' };
     }
 
-    const hits = scanContent(opts.content);
+    // Inject a stable v7 UUID into the frontmatter if missing. Idempotent
+    // on subsequent saves — content that already has a valid uuid round-
+    // trips unchanged. Done before the secret scan + no-op check so the
+    // value we scan + write + hash is the final on-disk form.
+    const finalContent = ensureNoteUuid(opts.content);
+
+    const hits = scanContent(finalContent);
     if (hits.length > 0) {
       return { kind: 'SECRETS', hits };
     }
@@ -129,7 +153,7 @@ export async function saveNote(opts: SaveOptions): Promise<SaveOutcome> {
         return { kind: 'CONFLICT', currentContent: current, currentSha };
       }
       // Unchanged content → no-op so we don't make an empty commit.
-      if (current === opts.content) {
+      if (current === finalContent) {
         return { kind: 'NOOP', sha: currentSha };
       }
     } else if (opts.baseSha !== null) {
@@ -144,9 +168,9 @@ export async function saveNote(opts: SaveOptions): Promise<SaveOutcome> {
       console.warn('[codex-sync] pre-write pull failed; proceeding with local write:', err);
     }
 
-    await writeVaultFile(opts.path, opts.content);
+    await writeVaultFile(opts.path, finalContent);
 
-    const newSha = contentSha(opts.content);
+    const newSha = contentSha(finalContent);
     const commit = await commitFiles([opts.path], opts.commitMessage, opts.author);
 
     invalidateIndex();
@@ -154,6 +178,109 @@ export async function saveNote(opts: SaveOptions): Promise<SaveOutcome> {
     schedulePush();
 
     return { kind: 'OK', newSha, commitSha: commit.sha };
+  });
+}
+
+// ─── UUID backfill ────────────────────────────────────────────────────────
+
+export type BackfillUuidsOutcome =
+  | {
+      kind: 'OK';
+      commitSha: string | null;
+      /** Vault-relative paths that received a UUID in this run. */
+      updatedFiles: string[];
+      /** Notes that already had a UUID. */
+      skipped: number;
+    }
+  | { kind: 'NOOP'; reason: string }
+  | { kind: 'INVALID'; reason: string };
+
+export interface BackfillUuidsOptions {
+  author: { name: string; email: string };
+  commitMessage?: string;
+  /** Optional dry-run — produce the list of files that WOULD be updated
+   *  without writing or committing anything. */
+  dryRun?: boolean;
+}
+
+/**
+ * One-shot backfill: walks every .md note in the vault, finds the ones
+ * without a frontmatter `uuid:` field, injects a fresh v7 UUID into
+ * each, and commits all updates in a single batch.
+ *
+ * Idempotent — re-running after a successful backfill is a NOOP.
+ * Auto-managed paths are skipped (the nightly-journal automation owns
+ * those; they can opt in to UUIDs separately if/when needed).
+ *
+ * Designed to be invoked once per existing vault. New notes saved
+ * through `saveNote` get a UUID automatically on first write.
+ */
+export async function backfillNoteUuids(
+  opts: BackfillUuidsOptions,
+): Promise<BackfillUuidsOutcome> {
+  return lock(async () => {
+    const idx = await getIndex();
+    const candidates: Array<{ rel: string; newContent: string }> = [];
+    let skipped = 0;
+
+    for (const [rel, meta] of idx.files) {
+      if (meta.isAutoManaged) continue;
+      if (meta.uuid) {
+        skipped++;
+        continue;
+      }
+      // Re-read from disk (index has body sans frontmatter; we need raw).
+      const raw = await readVaultFile(rel);
+      const parsed = parseNote(raw);
+      if (isValidUuid(parsed.data.uuid)) {
+        // Index was stale; nothing to do.
+        skipped++;
+        continue;
+      }
+      parsed.data.uuid = generateUuidV7();
+      const newContent = serializeNote(parsed.data, parsed.content);
+      candidates.push({ rel, newContent });
+    }
+
+    if (candidates.length === 0) {
+      return { kind: 'NOOP', reason: 'every note already has a uuid' };
+    }
+
+    if (opts.dryRun) {
+      return {
+        kind: 'OK',
+        commitSha: null,
+        updatedFiles: candidates.map((c) => c.rel),
+        skipped,
+      };
+    }
+
+    try {
+      await pullRebase();
+    } catch (err) {
+      console.warn('[codex-sync] pre-backfill pull failed; proceeding:', err);
+    }
+
+    for (const { rel, newContent } of candidates) {
+      await writeVaultFile(rel, newContent);
+    }
+
+    const paths = candidates.map((c) => c.rel);
+    const message =
+      opts.commitMessage?.trim() ||
+      `Backfill frontmatter UUIDs across ${paths.length} note${paths.length === 1 ? '' : 's'}`;
+    const commit = await commitFiles(paths, message, opts.author);
+
+    invalidateIndex();
+    invalidatePageRank();
+    schedulePush();
+
+    return {
+      kind: 'OK',
+      commitSha: commit.sha,
+      updatedFiles: paths,
+      skipped,
+    };
   });
 }
 
@@ -1237,12 +1364,6 @@ export async function applyVaultReplacement(
 }
 
 // ─── Tag rename / delete (chriscase/abydonian#227) ──────────────────────────
-
-import {
-  parseNote,
-  serializeNote,
-  type Frontmatter,
-} from './frontmatter';
 
 export type TagMutationOutcome =
   | { kind: 'OK'; commitSha: string; filesChanged: string[] }
