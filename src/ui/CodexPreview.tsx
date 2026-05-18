@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
@@ -167,12 +167,61 @@ function statusClass(status: string | null | undefined): string | null {
   }
 }
 
+const READING_MODE_KEY = 'ostracon-reading-mode';
+
+/** Resolved outbound link unique by resolvedPath. Embeds (images, PDFs)
+ *  are filtered out — the rail is for cross-document references. */
+function uniqueResolvedReferences(
+  links: CodexResolvedLink[],
+): Array<{ path: string; title: string; folder: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ path: string; title: string; folder: string }> = [];
+  for (const link of links) {
+    if (link.isEmbed || !link.resolvedPath) continue;
+    if (seen.has(link.resolvedPath)) continue;
+    seen.add(link.resolvedPath);
+    const segments = link.resolvedPath.split(/[\\/]/g);
+    const fileName = segments.pop() ?? link.resolvedPath;
+    const title = fileName.replace(/\.md$/i, '');
+    const folder = segments.length > 0 ? segments[0] : '';
+    out.push({ path: link.resolvedPath, title, folder });
+  }
+  return out;
+}
+
 export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, historyOpen }: Props) {
   const { Link } = useCodexNavigation();
   const md = useMemo(() => {
     const stripped = stripFrontmatter(note.content);
     return rewriteWikilinks(stripped, note.outboundLinks);
   }, [note.content, note.outboundLinks]);
+
+  const references = useMemo(
+    () => uniqueResolvedReferences(note.outboundLinks),
+    [note.outboundLinks],
+  );
+
+  // Reading-mode toggle persists per-browser. Default is OFF — the
+  // rail can crowd narrow viewports, and users opt in explicitly.
+  const [readingMode, setReadingMode] = useState<boolean>(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = window.localStorage.getItem(READING_MODE_KEY);
+      if (stored === '1') setReadingMode(true);
+    } catch {
+      /* quota / private-mode — ignore */
+    }
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(READING_MODE_KEY, readingMode ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [readingMode]);
+  const showRail = readingMode && references.length > 0;
 
   // One delegated set of hover / long-press handlers for ALL wikilinks
   // in the rendered markdown — instead of N PreviewLink components, one
@@ -194,6 +243,21 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
         <h2 style={{ margin: 0 }}>{note.title}</h2>
         {sClass && <span className={`${styles.statusBadge} ${sClass}`}>{note.status}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
+          {references.length > 0 && (
+            <button
+              type="button"
+              className={`${styles.btnSecondary}${readingMode ? ' ' + styles.btnSecondaryActive : ''}`}
+              onClick={() => setReadingMode((v) => !v)}
+              aria-pressed={readingMode ? 'true' : 'false'}
+              title={
+                readingMode
+                  ? 'Hide the references rail'
+                  : `Show ${references.length} reference${references.length === 1 ? '' : 's'} alongside the document`
+              }
+            >
+              {readingMode ? 'Hide references' : `References · ${references.length}`}
+            </button>
+          )}
           {onShowHistory && (
             <button
               type="button"
@@ -228,31 +292,65 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
         </div>
       )}
 
-      <div className={styles.markdown}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'wrap' }]]}
-        >
-          {md}
-        </ReactMarkdown>
+      <div
+        className={
+          showRail ? styles.readingModeLayout : styles.readingModeLayoutSingle
+        }
+      >
+        <div className={styles.readingModeBody}>
+          <div className={styles.markdown}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'wrap' }]]}
+            >
+              {md}
+            </ReactMarkdown>
+          </div>
+
+          {note.inboundLinks.length > 0 && (
+            <div className={styles.inboundLinks}>
+              <h3>Linked from</h3>
+              <ul>
+                {note.inboundLinks.map((link) => (
+                  <li key={link.path}>
+                    <Link href={noteHref(link.path)}>{link.title}</Link>
+                    <span className={styles.notePath} style={{ marginLeft: '0.5rem' }}>
+                      {link.folder}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {showRail && (
+          <aside className={styles.referencesRail} aria-label="References in this document">
+            <div className={styles.referencesRailHeader}>
+              <h3 className={styles.referencesRailTitle}>References</h3>
+              <span className={styles.referencesRailCount}>{references.length}</span>
+            </div>
+            <p className={styles.referencesRailHint}>
+              Hover any card for a preview without leaving the page.
+            </p>
+            <ul className={styles.referencesList}>
+              {references.map((r) => (
+                <li key={r.path}>
+                  <Link href={noteHref(r.path)} className={styles.referencesCard}>
+                    <span className={styles.referencesCardTitle}>{r.title}</span>
+                    {r.folder && (
+                      <span className={styles.referencesCardFolder}>
+                        {r.folder.replace(/^\d+\s*-\s*/, '')}
+                      </span>
+                    )}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        )}
       </div>
       {popover}
-
-      {note.inboundLinks.length > 0 && (
-        <div className={styles.inboundLinks}>
-          <h3>Linked from</h3>
-          <ul>
-            {note.inboundLinks.map((link) => (
-              <li key={link.path}>
-                <Link href={noteHref(link.path)}>{link.title}</Link>
-                <span className={styles.notePath} style={{ marginLeft: '0.5rem' }}>
-                  {link.folder}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }
