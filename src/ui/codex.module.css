@@ -999,31 +999,104 @@
 }
 
 .mobileGraphFallback {
-  padding: 1rem 0.5rem;
+  padding: 1rem 0.75rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .mobileGraphFallback h3 {
-  margin: 0 0 0.5rem 0;
-  font-size: 1rem;
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
 }
 
-.mobileFolderList {
-  list-style: none;
-  margin: 1rem 0 0 0;
-  padding: 0;
-  font-size: 0.875rem;
+.mobileGraphSubtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
 }
 
-.mobileFolderList li {
+.mobileGraphSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mobileGraphSectionHeading {
+  margin: 0.4rem 0 0.1rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0;
-  border-bottom: 1px solid var(--border);
+  gap: 0.4rem;
 }
 
-.mobileFolderList strong {
+.mobileGraphSectionCount {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.mobileGraphList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mobileGraphRow {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+  /* Active-feedback on tap for iOS / Android. */
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+
+.mobileGraphRow:active {
+  background: rgba(120, 200, 255, 0.12);
+  border-color: rgba(120, 200, 255, 0.45);
+}
+
+.mobileGraphRowLabel {
   flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileGraphRowMeta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mobileGraphRowChevron {
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 /* ─── Editor + buttons + toasts (PR #203) ───────────────────── */
