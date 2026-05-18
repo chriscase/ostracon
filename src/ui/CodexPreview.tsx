@@ -185,7 +185,11 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
   const showAutoBanner = note.isAutoManaged && ACTIVITY_HEADING_RE.test(note.content);
 
   return (
-    <div>
+    // The delegated wikilink-popover handlers attach to the root so any
+    // codex-route <a> rendered anywhere in this view (markdown body,
+    // "Linked from" list, future surfaces) opens the preview popover
+    // without extra wiring.
+    <div {...wikilinkHandlers}>
       <div className={styles.noteHeader}>
         <h2 style={{ margin: 0 }}>{note.title}</h2>
         {sClass && <span className={`${styles.statusBadge} ${sClass}`}>{note.status}</span>}
@@ -224,7 +228,7 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
         </div>
       )}
 
-      <div className={styles.markdown} {...wikilinkHandlers}>
+      <div className={styles.markdown}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'wrap' }]]}
