@@ -49,15 +49,19 @@ import { generateUuidV7, isValidUuid } from './uuid';
  * a fresh v7 UUID and re-serialize. Idempotent — content that already has
  * a valid UUID round-trips unchanged.
  *
- * Used by saveNote and friends so every committed note carries a stable
- * identifier from its first write. Anchors comments, annotations,
- * embeddings, audit-log entries.
+ * Returns both the (possibly-modified) content and the UUID, so callers
+ * that want to reference the UUID in a commit message don't have to
+ * re-parse. Used by saveNote and by the GraphQL mutation layer when it
+ * needs the UUID to populate the `Note-UUID:` trailer.
  */
-function ensureNoteUuid(content: string): string {
+export function ensureNoteUuid(content: string): { content: string; uuid: string } {
   const parsed = parseNote(content);
-  if (isValidUuid(parsed.data.uuid)) return content;
-  parsed.data.uuid = generateUuidV7();
-  return serializeNote(parsed.data, parsed.content);
+  if (isValidUuid(parsed.data.uuid)) {
+    return { content, uuid: parsed.data.uuid };
+  }
+  const uuid = generateUuidV7();
+  parsed.data.uuid = uuid;
+  return { content: serializeNote(parsed.data, parsed.content), uuid };
 }
 
 export type SaveOutcome =
@@ -133,7 +137,7 @@ export async function saveNote(opts: SaveOptions): Promise<SaveOutcome> {
     // on subsequent saves — content that already has a valid uuid round-
     // trips unchanged. Done before the secret scan + no-op check so the
     // value we scan + write + hash is the final on-disk form.
-    const finalContent = ensureNoteUuid(opts.content);
+    const { content: finalContent } = ensureNoteUuid(opts.content);
 
     const hits = scanContent(finalContent);
     if (hits.length > 0) {
