@@ -14,6 +14,7 @@ import { getVaultRoot } from './config';
 import { parseNote } from './frontmatter';
 import { extractWikilinks, resolveWikilink, type Wikilink } from './wikilinks';
 import { isAutoManagedPath } from './auto-managed';
+import { isValidUuid } from './uuid';
 
 /** SHA-256 of the raw file bytes, used as an opaque optimistic-concurrency token. */
 export function contentSha(content: string): string {
@@ -34,6 +35,11 @@ export interface NoteMeta {
   sha: string;
   /** Plain-text body content (post-frontmatter), kept in-index for body search. */
   body: string;
+  /** Stable v7 UUID from frontmatter, when present. Injected by saveNote
+   *  on first write; survives renames + moves. Anchor for DB-backed
+   *  features. Undefined for legacy notes that haven't been re-saved
+   *  yet (run `backfillNoteUuids` to populate them in bulk). */
+  uuid?: string;
 }
 
 export interface Edge {
@@ -45,6 +51,11 @@ export interface Edge {
 export interface VaultIndex {
   files: Map<string, NoteMeta>;
   titles: Map<string, string[]>;
+  /** Reverse index: frontmatter UUID → vault-relative path. Lets DB-
+   *  backed features look up the current path of a note that was
+   *  renamed since they last saw it. Only includes notes whose
+   *  frontmatter carries a `uuid:` field. */
+  uuidsByPath: Map<string, string>;
   edges: Edge[];
   builtAt: number;
 }
@@ -81,7 +92,19 @@ async function buildIndex(): Promise<VaultIndex> {
   await walk(getVaultRoot(), '', files, titles);
 
   const edges: Edge[] = [];
+  const uuidsByPath = new Map<string, string>();
   for (const [, meta] of files) {
+    if (meta.uuid) {
+      // First write wins on collision (which shouldn't happen — log it).
+      const existing = uuidsByPath.get(meta.uuid);
+      if (existing && existing !== meta.path) {
+        console.warn(
+          `[vault-index] duplicate uuid ${meta.uuid} — keeping ${existing}, ignoring ${meta.path}`,
+        );
+      } else {
+        uuidsByPath.set(meta.uuid, meta.path);
+      }
+    }
     const linkCounts = new Map<string, number>();
     for (const link of meta.outboundLinks) {
       if (link.isEmbed) continue; // attachment embeds aren't graph edges
@@ -95,7 +118,7 @@ async function buildIndex(): Promise<VaultIndex> {
     }
   }
 
-  return { files, titles, edges, builtAt: Date.now() };
+  return { files, titles, uuidsByPath, edges, builtAt: Date.now() };
 }
 
 async function walk(
@@ -140,6 +163,7 @@ async function walk(
           isAutoManaged: isAutoManagedPath(childRel),
           sha: contentSha(raw),
           body: parsed.content,
+          uuid: isValidUuid(parsed.data.uuid) ? parsed.data.uuid : undefined,
         };
         files.set(childRel, meta);
         registerTitle(titles, title, childRel);
@@ -189,6 +213,17 @@ export async function getTree(): Promise<TreeNode> {
 export async function getNoteMeta(rel: string): Promise<NoteMeta | null> {
   const idx = await getIndex();
   return idx.files.get(rel) ?? null;
+}
+
+/**
+ * Look up the current vault path of a note by its stable frontmatter UUID.
+ * Returns null when no note carries that UUID (renamed, deleted, or the
+ * UUID never existed). DB-backed features that key on UUID should use
+ * this to resolve to the current on-disk path when reading.
+ */
+export async function getNotePathByUuid(uuid: string): Promise<string | null> {
+  const idx = await getIndex();
+  return idx.uuidsByPath.get(uuid) ?? null;
 }
 
 function registerTitle(

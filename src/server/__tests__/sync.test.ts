@@ -28,11 +28,14 @@ import {
   deleteTag,
   computeVaultTags,
   syncFromRemote,
+  backfillNoteUuids,
   _resetSyncForTest,
 } from '../sync';
-import { invalidateIndex, contentSha } from '../vault-index';
+import { invalidateIndex, contentSha, getNotePathByUuid, getIndex } from '../vault-index';
 import { invalidatePageRank } from '../graph';
 import { resetGit } from '../git';
+import { parseNote } from '../frontmatter';
+import { isValidUuid } from '../uuid';
 
 const exec = promisify(execFile);
 
@@ -161,7 +164,10 @@ describe('saveNote — guard rails (no git involvement)', () => {
 
   it('returns NOOP when content is unchanged', async () => {
     const rel = '20 - Products/NoOp.md';
-    const initial = '# Same content';
+    // saveNote auto-injects a frontmatter UUID, so a true no-op needs a
+    // fixture that already carries one — otherwise the re-save becomes a
+    // real change (injecting the UUID).
+    const initial = '---\nuuid: 01970000-0000-7000-8000-000000000002\n---\n\n# Same content';
     const baseSha = await writeFixture(rel, initial);
 
     const outcome = await saveNote({
@@ -1245,5 +1251,185 @@ describe('computeVaultTags', () => {
     if (popular && niche) {
       expect(tags.indexOf(popular)).toBeLessThan(tags.indexOf(niche));
     }
+  });
+});
+
+describe('saveNote — frontmatter UUID injection', () => {
+  it('injects a v7 UUID into a new note that does not carry one', async () => {
+    const rel = '20 - Products/UuidNew.md';
+    const content = '---\ntags: [test]\n---\n\nbody';
+    const outcome = await saveNote({
+      path: rel,
+      content,
+      baseSha: null,
+      author,
+      commitMessage: 'create note',
+    });
+    expect(outcome.kind).toBe('OK');
+    const onDisk = await fs.readFile(path.join(tmpRoot, rel), 'utf8');
+    const parsed = parseNote(onDisk);
+    expect(isValidUuid(parsed.data.uuid)).toBe(true);
+  });
+
+  it('preserves an existing UUID on round-trip save', async () => {
+    const rel = '20 - Products/UuidRoundtrip.md';
+    const presetUuid = '01970000-0000-7000-8000-000000000001';
+    const content = `---\nuuid: ${presetUuid}\ntags: [test]\n---\n\nbody`;
+    // First save to write to disk.
+    await saveNote({
+      path: rel,
+      content,
+      baseSha: null,
+      author,
+      commitMessage: 'create preset',
+    });
+    const after = await fs.readFile(path.join(tmpRoot, rel), 'utf8');
+    const parsed = parseNote(after);
+    expect(parsed.data.uuid).toBe(presetUuid);
+  });
+
+  it('keeps the UUID stable when the body is edited', async () => {
+    const rel = '20 - Products/UuidStable.md';
+    // Initial save — generates a UUID.
+    await saveNote({
+      path: rel,
+      content: '---\ntags: [test]\n---\n\nbody v1',
+      baseSha: null,
+      author,
+      commitMessage: 'create',
+    });
+    const first = await fs.readFile(path.join(tmpRoot, rel), 'utf8');
+    const firstUuid = parseNote(first).data.uuid;
+    expect(isValidUuid(firstUuid)).toBe(true);
+
+    // Edit — pass back the existing content (with uuid) + a small body change.
+    const edited = first.replace('body v1', 'body v2');
+    const baseSha = contentSha(first);
+    const outcome = await saveNote({
+      path: rel,
+      content: edited,
+      baseSha,
+      author,
+      commitMessage: 'edit body',
+    });
+    expect(outcome.kind).toBe('OK');
+    const after = await fs.readFile(path.join(tmpRoot, rel), 'utf8');
+    expect(parseNote(after).data.uuid).toBe(firstUuid);
+  });
+
+  it('survives a rename — same UUID on both sides of the move', async () => {
+    const oldRel = '20 - Products/UuidRename.md';
+    const newRel = '20 - Products/UuidRenameTarget.md';
+    await saveNote({
+      path: oldRel,
+      content: '---\ntags: [test]\n---\n\nbody',
+      baseSha: null,
+      author,
+      commitMessage: 'create',
+    });
+    const beforeRename = await fs.readFile(path.join(tmpRoot, oldRel), 'utf8');
+    const originalUuid = parseNote(beforeRename).data.uuid;
+
+    const outcome = await renameNote({
+      oldPath: oldRel,
+      newPath: newRel,
+      author,
+      commitMessage: 'rename',
+    });
+    expect(outcome.kind).toBe('OK');
+
+    const afterRename = await fs.readFile(path.join(tmpRoot, newRel), 'utf8');
+    expect(parseNote(afterRename).data.uuid).toBe(originalUuid);
+  });
+
+  it('exposes uuid via NoteMeta + getNotePathByUuid resolves to current path', async () => {
+    const rel = '20 - Products/UuidLookup.md';
+    await saveNote({
+      path: rel,
+      content: '---\ntags: [test]\n---\n\nbody',
+      baseSha: null,
+      author,
+      commitMessage: 'create',
+    });
+    const raw = await fs.readFile(path.join(tmpRoot, rel), 'utf8');
+    const uuid = parseNote(raw).data.uuid;
+    expect(isValidUuid(uuid)).toBe(true);
+
+    invalidateIndex();
+    const idx = await getIndex();
+    const meta = idx.files.get(rel);
+    expect(meta?.uuid).toBe(uuid);
+    expect(idx.uuidsByPath.get(uuid as string)).toBe(rel);
+
+    const resolved = await getNotePathByUuid(uuid as string);
+    expect(resolved).toBe(rel);
+    expect(await getNotePathByUuid('00000000-0000-0000-0000-000000000000')).toBeNull();
+  });
+});
+
+describe('backfillNoteUuids', () => {
+  // Shared tmp dir is populated by prior describe blocks. Each backfill
+  // test asserts on its OWN fixtures rather than the full updatedFiles
+  // list, then runs backfill once to leave the suite in a uuid-clean
+  // state for the next test.
+
+  it('adds UUIDs to notes missing one and skips those that already have one', async () => {
+    const presetUuid = '01970000-0000-7111-8000-000000000abc';
+    await writeFixture('99 - Backfill/A.md', '---\ntags: [a]\n---\n\nbody A');
+    await writeFixture('99 - Backfill/B.md', '---\ntags: [b]\n---\n\nbody B');
+    await writeFixture(
+      '99 - Backfill/C.md',
+      `---\nuuid: ${presetUuid}\ntags: [c]\n---\n\nbody C`,
+    );
+    await exec('git', ['-C', tmpRoot, 'add', '.']);
+    await exec('git', ['-C', tmpRoot, 'commit', '-q', '-m', 'fixtures-backfill']);
+    invalidateIndex();
+
+    const outcome = await backfillNoteUuids({
+      author,
+      commitMessage: 'backfill uuids',
+    });
+    expect(outcome.kind).toBe('OK');
+    if (outcome.kind !== 'OK') return;
+    expect(outcome.updatedFiles).toContain('99 - Backfill/A.md');
+    expect(outcome.updatedFiles).toContain('99 - Backfill/B.md');
+    expect(outcome.updatedFiles).not.toContain('99 - Backfill/C.md');
+    expect(outcome.commitSha).toBeTruthy();
+
+    const a = await fs.readFile(path.join(tmpRoot, '99 - Backfill/A.md'), 'utf8');
+    const b = await fs.readFile(path.join(tmpRoot, '99 - Backfill/B.md'), 'utf8');
+    const c = await fs.readFile(path.join(tmpRoot, '99 - Backfill/C.md'), 'utf8');
+    expect(isValidUuid(parseNote(a).data.uuid)).toBe(true);
+    expect(isValidUuid(parseNote(b).data.uuid)).toBe(true);
+    expect(parseNote(c).data.uuid).toBe(presetUuid);
+  });
+
+  it('dry-run reports what would change without writing or committing', async () => {
+    const dryRel = '99 - BackfillDry/X.md';
+    await writeFixture(dryRel, '---\ntags: [x]\n---\n\nbody');
+    invalidateIndex();
+
+    const outcome = await backfillNoteUuids({
+      author,
+      dryRun: true,
+    });
+    expect(outcome.kind).toBe('OK');
+    if (outcome.kind !== 'OK') return;
+    expect(outcome.commitSha).toBeNull();
+    expect(outcome.updatedFiles).toContain(dryRel);
+
+    // The fixture file on disk must remain unchanged.
+    const x = await fs.readFile(path.join(tmpRoot, dryRel), 'utf8');
+    expect(parseNote(x).data.uuid).toBeUndefined();
+  });
+
+  it('returns NOOP after a successful run leaves no notes missing a UUID', async () => {
+    // First, make sure the vault is fully backfilled.
+    invalidateIndex();
+    await backfillNoteUuids({ author });
+    invalidateIndex();
+    // Second run must be a no-op.
+    const outcome = await backfillNoteUuids({ author });
+    expect(outcome.kind).toBe('NOOP');
   });
 });
