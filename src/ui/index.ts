@@ -41,6 +41,12 @@ export { default as CodexPreview, type CodexNote, type CodexResolvedLink } from 
 export { default as CodexEditor } from './CodexEditor';
 export { default as CodexGraph } from './CodexGraph';
 export { default as CodexSearch, type CodexSearchHit } from './CodexSearch';
+export {
+  SearchPalette,
+  SearchPaletteTrigger,
+  openSearchPalette,
+  type SearchPaletteProps,
+} from './SearchPalette';
 export { default as CommandPalette, type PaletteAction } from './CommandPalette';
 export { default as QuickOpen } from './QuickOpen';
 export { default as KeyboardShortcutsHelp } from './KeyboardShortcutsHelp';
