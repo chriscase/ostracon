@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { memo, useState, useMemo, useCallback } from 'react';
 import { useCodexNavigation } from './CodexAdapters';
 import styles from './codex.module.css';
 
@@ -70,7 +70,12 @@ function noteHref(relPath: string): string {
     .join('/');
 }
 
-export default function CodexTree({
+// Memoized so a parent re-render that doesn't change tree props
+// (e.g. a sidebar dialog opens elsewhere in CodexBrowser) skips the
+// tree re-render entirely. Caller must keep handlers + multiSelect
+// referentially stable for this to actually help — see CodexBrowser's
+// useCallback / useMemo discipline at the call site.
+function CodexTreeInner({
   root,
   selectedPath,
   onRename,
@@ -102,6 +107,9 @@ export default function CodexTree({
     </ul>
   );
 }
+
+const CodexTree = memo(CodexTreeInner);
+export default CodexTree;
 
 function TreeItem({
   node,

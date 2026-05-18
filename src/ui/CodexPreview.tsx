@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
@@ -189,7 +189,11 @@ function uniqueResolvedReferences(
   return out;
 }
 
-export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, historyOpen }: Props) {
+// Memoized so unrelated parent re-renders (sidebar dialog opens,
+// search-palette open/close, etc.) skip the full re-render of the
+// rendered markdown body. Caller must keep handler props stable —
+// see CodexBrowser's onPreviewEdit / onPreviewShowHistory useCallbacks.
+function CodexPreviewInner({ note, canEdit, onEdit, onShowHistory, historyOpen }: Props) {
   const { Link } = useCodexNavigation();
   const md = useMemo(() => {
     const stripped = stripFrontmatter(note.content);
@@ -354,3 +358,6 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
     </div>
   );
 }
+
+const CodexPreview = memo(CodexPreviewInner);
+export default CodexPreview;
