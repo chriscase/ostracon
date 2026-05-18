@@ -7,7 +7,7 @@ import rehypeSlug from 'rehype-slug';
 import rehypeAutolinkHeadings from 'rehype-autolink-headings';
 import { useCodexNavigation } from './CodexAdapters';
 import { noteHref } from './CodexTree';
-import { PreviewLink } from './ConceptPopover';
+import { useConceptPopoverDelegation } from './ConceptPopover';
 import styles from './codex.module.css';
 
 export interface CodexResolvedLink {
@@ -174,6 +174,13 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
     return rewriteWikilinks(stripped, note.outboundLinks);
   }, [note.content, note.outboundLinks]);
 
+  // One delegated set of hover / long-press handlers for ALL wikilinks
+  // in the rendered markdown — instead of N PreviewLink components, one
+  // listener at the wrapper. Major perf win on documents with many
+  // cross-references (_Glossary.md has ~300 wikilinks).
+  const { containerProps: wikilinkHandlers, popover } =
+    useConceptPopoverDelegation();
+
   const sClass = statusClass(note.status);
   const showAutoBanner = note.isAutoManaged && ACTIVITY_HEADING_RE.test(note.content);
 
@@ -217,15 +224,15 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, his
         </div>
       )}
 
-      <div className={styles.markdown}>
+      <div className={styles.markdown} {...wikilinkHandlers}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'wrap' }]]}
-          components={{ a: PreviewLink }}
         >
           {md}
         </ReactMarkdown>
       </div>
+      {popover}
 
       {note.inboundLinks.length > 0 && (
         <div className={styles.inboundLinks}>

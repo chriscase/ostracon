@@ -2592,11 +2592,40 @@
    * positioned, then flips to 1. */
 }
 
+.conceptCardClose {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.45));
+  font-size: 0.85rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 100ms ease, color 100ms ease;
+  z-index: 1;
+}
+
+.conceptCardClose:hover,
+.conceptCardClose:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, white);
+  outline: none;
+}
+
 .conceptBody {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  padding: 0.85rem 1rem 0.75rem;
+  /* Right padding leaves room for the absolutely-positioned close (✕)
+   * button so a long title doesn't overlap it. */
+  padding: 0.85rem 2.2rem 0.75rem 1rem;
 }
 
 .conceptHeader {

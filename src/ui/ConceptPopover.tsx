@@ -206,6 +206,28 @@ export default function ConceptPopover({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Desktop: dismiss on click anywhere outside the card. Also dismiss
+  // on page scroll or window resize — the anchored position would be
+  // stale otherwise. (Mobile sheet has its own backdrop tap; ignore
+  // these listeners on touch.)
+  useEffect(() => {
+    if (isTouch) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!cardRef.current) return;
+      if (cardRef.current.contains(e.target as Node)) return;
+      onClose();
+    };
+    const onScrollOrResize = () => onClose();
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+      window.removeEventListener('resize', onScrollOrResize);
+    };
+  }, [isTouch, onClose]);
+
   const handleOpen = useCallback(() => {
     const target = data?.path ?? path;
     const href = noteHref
@@ -276,6 +298,15 @@ export default function ConceptPopover({
       role="dialog"
       aria-label="Document preview"
     >
+      <button
+        type="button"
+        className={styles.conceptCardClose}
+        onClick={onClose}
+        aria-label="Close preview"
+        title="Close (Esc)"
+      >
+        ✕
+      </button>
       {renderBody({ data, loading, error })}
       <div className={styles.conceptCardActions}>
         <button
@@ -337,41 +368,53 @@ function renderBody({
   );
 }
 
-// ─── Wikilink-aware <a> wrapper ──────────────────────────────────────────
+// ─── Event-delegation helper for codex wikilinks ────────────────────────
 //
-// Drop this in as the `a` component for react-markdown so any link that
-// looks like a codex document route gets hover + long-press handlers
-// that open the concept popover. Non-codex links pass through untouched.
+// Replaces the previous per-link PreviewLink component (which created
+// one React component instance + 4 hooks + 6 event handlers per
+// wikilink — for documents with hundreds of links that's a real perf
+// drag during hover and re-renders). Instead, the markdown container
+// uses a single delegated listener, plain <a> tags underneath, and
+// one popover state at the document level.
+//
+// Hosts call `useConceptPopoverDelegation()` and spread the returned
+// handler set onto the markdown wrapper div. The hook returns the
+// popover element to render alongside the markdown (or null).
 
-const CODEX_ROUTE_RE = /\/admin\/codex\/note\//;
+export interface DelegationState {
+  path: string;
+  anchorRect: DOMRect | null;
+  isTouch: boolean;
+}
 
-// react-markdown passes the full HTMLAnchorElement attribute set plus
-// some internal props (`node`, etc.). We type as the loose intersection
-// and spread the rest through unchanged so syntax highlighting,
-// rehype-autolink anchors, etc. keep working.
-export type PreviewLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
-  href?: string;
-  children?: ReactNode;
-  // rehype/react-markdown sometimes emits an internal `node` prop —
-  // accept it without using it.
-  node?: unknown;
-};
+export interface DelegationProps {
+  /** Spread these onto the wrapping div around <ReactMarkdown>. */
+  containerProps: {
+    onMouseOver: (e: React.MouseEvent<HTMLDivElement>) => void;
+    onMouseOut: (e: React.MouseEvent<HTMLDivElement>) => void;
+    onTouchStart: (e: React.TouchEvent<HTMLDivElement>) => void;
+    onTouchEnd: (e: React.TouchEvent<HTMLDivElement>) => void;
+    onTouchMove: (e: React.TouchEvent<HTMLDivElement>) => void;
+    onTouchCancel: (e: React.TouchEvent<HTMLDivElement>) => void;
+    onClickCapture: (e: React.MouseEvent<HTMLDivElement>) => void;
+  };
+  /** Render this in the same tree as the container — it's a portal
+   *  internally so DOM position doesn't matter, but React must mount
+   *  it for the popover to appear. */
+  popover: ReactNode;
+}
 
-export function PreviewLink({ href, children, node: _node, ...rest }: PreviewLinkProps) {
-  const [open, setOpen] = useState<{
-    path: string;
-    anchorRect: DOMRect | null;
-    isTouch: boolean;
-  } | null>(null);
-  const aRef = useRef<HTMLAnchorElement | null>(null);
+/** Wire codex-wikilink popovers via event delegation on a single
+ *  container element. Returns `containerProps` to spread onto the
+ *  markdown wrapper, and a `popover` ReactNode to render. */
+export function useConceptPopoverDelegation(
+  noteHref?: (path: string) => string,
+): DelegationProps {
+  const [open, setOpen] = useState<DelegationState | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
 
-  const codexPath = href ? decodeCodexHref(href) : null;
-  const isWikilink = !!codexPath;
-
-  // Clear any pending timers when the link unmounts mid-hover.
   useEffect(() => {
     return () => {
       if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
@@ -379,90 +422,118 @@ export function PreviewLink({ href, children, node: _node, ...rest }: PreviewLin
     };
   }, []);
 
-  if (!isWikilink) {
-    return (
-      <a href={href} {...(rest as Record<string, unknown>)}>
-        {children}
-      </a>
-    );
-  }
-
-  const openPopover = (isTouch: boolean) => {
-    const rect = aRef.current?.getBoundingClientRect() ?? null;
-    setOpen({ path: codexPath, anchorRect: rect, isTouch });
+  const findWikilinkAnchor = (target: EventTarget | null): {
+    el: HTMLAnchorElement;
+    path: string;
+  } | null => {
+    if (!(target instanceof HTMLElement)) return null;
+    const a = target.closest('a');
+    if (!a) return null;
+    const href = a.getAttribute('href');
+    if (!href) return null;
+    const path = decodeCodexHref(href);
+    if (!path) return null;
+    return { el: a, path };
   };
 
-  const onMouseEnter = () => {
-    if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = window.setTimeout(() => openPopover(false), HOVER_DELAY_MS);
-  };
-
-  const onMouseLeave = () => {
+  const cancelHover = () => {
     if (hoverTimerRef.current) {
       window.clearTimeout(hoverTimerRef.current);
       hoverTimerRef.current = null;
     }
-    // Don't close on leave here — the card has its own onMouseLeave that
-    // handles dismissal so the user can move from link → card without
-    // the card disappearing.
+  };
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
 
-  const onTouchStart = () => {
-    if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
+  const onMouseOver = (e: React.MouseEvent<HTMLDivElement>) => {
+    const hit = findWikilinkAnchor(e.target);
+    if (!hit) return;
+    cancelHover();
+    const el = hit.el;
+    const path = hit.path;
+    hoverTimerRef.current = window.setTimeout(() => {
+      setOpen({ path, anchorRect: el.getBoundingClientRect(), isTouch: false });
+    }, HOVER_DELAY_MS);
+  };
+
+  const onMouseOut = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Only cancel if we're leaving the anchor we were hovering. The
+    // related target check is loose — any movement off a wikilink
+    // cancels the pending hover; the popover's own onMouseLeave still
+    // dismisses an opened card.
+    const hit = findWikilinkAnchor(e.target);
+    if (hit) cancelHover();
+  };
+
+  const onTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const hit = findWikilinkAnchor(e.target);
+    if (!hit) return;
+    cancelLongPress();
+    const el = hit.el;
+    const path = hit.path;
     longPressTimerRef.current = window.setTimeout(() => {
       suppressClickRef.current = true;
-      openPopover(true);
+      setOpen({ path, anchorRect: el.getBoundingClientRect(), isTouch: true });
     }, LONG_PRESS_MS);
   };
 
-  const onTouchEnd = () => {
-    if (longPressTimerRef.current) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
+  const onTouchEnd = () => cancelLongPress();
+  const onTouchMove = () => cancelLongPress();
+  const onTouchCancel = () => cancelLongPress();
 
-  const onTouchMove = () => {
-    // Movement cancels the long-press intent.
-    if (longPressTimerRef.current) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
-
-  const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+  const onClickCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    // If the user long-pressed, suppress the synthetic click that some
+    // browsers fire after the touch ends.
     if (suppressClickRef.current) {
-      e.preventDefault();
+      const hit = findWikilinkAnchor(e.target);
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       suppressClickRef.current = false;
     }
-    // Otherwise: regular link click navigates normally.
   };
 
+  return {
+    containerProps: {
+      onMouseOver,
+      onMouseOut,
+      onTouchStart,
+      onTouchEnd,
+      onTouchMove,
+      onTouchCancel,
+      onClickCapture,
+    },
+    popover: open ? (
+      <ConceptPopover
+        path={open.path}
+        anchorRect={open.anchorRect}
+        isTouch={open.isTouch}
+        onClose={() => setOpen(null)}
+        noteHref={noteHref}
+      />
+    ) : null,
+  };
+}
+
+// Legacy export — kept so existing call sites importing PreviewLink
+// don't break during the migration. New code should use
+// useConceptPopoverDelegation() instead.
+export type PreviewLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  href?: string;
+  children?: ReactNode;
+  node?: unknown;
+};
+export function PreviewLink({ href, children, node: _node, ...rest }: PreviewLinkProps) {
+  void _node;
   return (
-    <>
-      <a
-        ref={aRef}
-        href={href}
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
-        onTouchStart={onTouchStart}
-        onTouchEnd={onTouchEnd}
-        onTouchMove={onTouchMove}
-        onTouchCancel={onTouchEnd}
-        onClick={onClick}
-        {...rest}
-      >
-        {children}
-      </a>
-      {open && (
-        <ConceptPopover
-          path={open.path}
-          anchorRect={open.anchorRect}
-          isTouch={open.isTouch}
-          onClose={() => setOpen(null)}
-        />
-      )}
-    </>
+    <a href={href} {...rest}>
+      {children}
+    </a>
   );
 }
 
@@ -477,5 +548,3 @@ function decodeCodexHref(href: string): string | null {
     .join('/');
   return decoded.endsWith('.md') ? decoded : decoded + '.md';
 }
-
-void CODEX_ROUTE_RE; // exported above via decodeCodexHref behavior — keep ref for tree-shake hint
