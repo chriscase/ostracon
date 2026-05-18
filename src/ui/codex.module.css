@@ -2570,3 +2570,235 @@
     display: none;
   }
 }
+
+/* ─── Concept popover ───────────────────────────────────────────────────── */
+
+/* Desktop floating card — anchored next to the hovered wikilink. */
+.conceptCard {
+  position: fixed;
+  z-index: 1100;
+  width: min(360px, 92vw);
+  background: var(--bg-elevated, #14171f);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow:
+    0 16px 40px -16px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  transition: opacity 120ms ease;
+  /* Fade-in on first measure: parent inline-styles opacity 0 until
+   * positioned, then flips to 1. */
+}
+
+.conceptBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.85rem 1rem 0.75rem;
+}
+
+.conceptHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.conceptTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary, white);
+  flex: 1;
+  min-width: 0;
+}
+
+.conceptStatus {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(120, 200, 255, 0.14);
+  color: rgb(180, 220, 255);
+  border: 1px solid rgba(120, 200, 255, 0.32);
+}
+
+.conceptFolder {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.7rem;
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.5));
+  margin-bottom: 0.1rem;
+}
+
+.conceptExcerpt {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.78));
+  /* Soft clamp; ellipsis-friendly. */
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.conceptTagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+}
+
+.conceptTag {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+
+.conceptCardActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem 0.65rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.conceptCardOpenButton {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(120, 200, 255, 0.16);
+  border: 1px solid rgba(120, 200, 255, 0.4);
+  border-radius: 6px;
+  color: rgb(180, 220, 255);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.conceptCardOpenButton:hover:not(:disabled) {
+  background: rgba(120, 200, 255, 0.24);
+}
+
+.conceptCardOpenButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.conceptError {
+  padding: 1rem;
+  color: rgb(240, 130, 130);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.conceptSkeletonTitle,
+.conceptSkeletonExcerpt {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: paletteShimmer 1.2s infinite;
+}
+
+.conceptSkeletonTitle {
+  height: 16px;
+  width: 60%;
+}
+
+.conceptSkeletonExcerpt {
+  height: 12px;
+  width: 100%;
+}
+
+/* Mobile bottom sheet — full-width card sliding up from the bottom. */
+.conceptSheetBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(8, 10, 16, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+  animation: paletteFadeIn 160ms ease-out;
+}
+
+.conceptSheet {
+  width: 100%;
+  background: var(--bg-elevated, #14171f);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -16px 32px -8px rgba(0, 0, 0, 0.4);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  animation: paletteSlideUp 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+}
+
+.conceptSheetHandle {
+  width: 36px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  margin: 0.55rem auto 0.1rem;
+}
+
+.conceptSheetActions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.conceptSheetSecondary,
+.conceptSheetPrimary {
+  flex: 1;
+  min-height: 44px;
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.conceptSheetSecondary {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+}
+
+.conceptSheetSecondary:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, white);
+}
+
+.conceptSheetPrimary {
+  background: rgba(120, 200, 255, 0.18);
+  border: 1px solid rgba(120, 200, 255, 0.42);
+  color: rgb(180, 220, 255);
+}
+
+.conceptSheetPrimary:hover:not(:disabled) {
+  background: rgba(120, 200, 255, 0.26);
+}
+
+.conceptSheetPrimary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

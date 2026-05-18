@@ -47,6 +47,12 @@ export {
   openSearchPalette,
   type SearchPaletteProps,
 } from './SearchPalette';
+export {
+  default as ConceptPopover,
+  PreviewLink,
+  type ConceptPopoverProps,
+  type PreviewLinkProps,
+} from './ConceptPopover';
 export { default as CommandPalette, type PaletteAction } from './CommandPalette';
 export { default as QuickOpen } from './QuickOpen';
 export { default as KeyboardShortcutsHelp } from './KeyboardShortcutsHelp';
