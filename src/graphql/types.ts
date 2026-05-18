@@ -157,7 +157,10 @@ export const CodexSearchHitType: GraphQLObjectType = new GraphQLObjectType({
   name: 'CodexSearchHit',
   fields: () => ({
     note: { type: new GraphQLNonNull(CodexNoteSummaryType) },
-    score: { type: new GraphQLNonNull(GraphQLInt) },
+    // Float (not Int) so adapters returning continuous ranks — tsvector
+    // ts_rank_cd, cosine similarity from pgvector, etc. — can pass them
+    // through without rounding.
+    score: { type: new GraphQLNonNull(GraphQLFloat) },
     matchedOn: { type: new GraphQLNonNull(CodexSearchHitMatchEnum) },
     excerpt: { type: GraphQLString },
   }),
