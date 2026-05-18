@@ -39,6 +39,8 @@ export * from './find-replace';
 export * from './auto-managed';
 export * from './user-prefs';
 export * from './config';
+export * from './uuid';
+export * from './commit-format';
 export {
   getFileHistory,
   readFileAtSha,

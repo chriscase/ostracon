@@ -74,18 +74,40 @@ describe('codexMutationFields — public write surface', () => {
     }
   });
 
-  it('saveNote takes path, content, baseSha, commitMessage', () => {
+  it('saveNote takes path, content, baseSha, userMessage, commitMessage', () => {
     const args = codexMutationFields.saveNote.args ?? {};
     expect(Object.keys(args).sort()).toEqual(
-      ['baseSha', 'commitMessage', 'content', 'path'].sort(),
+      ['baseSha', 'commitMessage', 'content', 'path', 'userMessage'].sort(),
     );
   });
 
-  it('createNote takes path, content, commitMessage (no baseSha)', () => {
+  it('createNote takes path, content, userMessage, commitMessage (no baseSha)', () => {
     const args = codexMutationFields.createNote.args ?? {};
     expect(Object.keys(args).sort()).toEqual(
-      ['commitMessage', 'content', 'path'].sort(),
+      ['commitMessage', 'content', 'path', 'userMessage'].sort(),
     );
+  });
+
+  it('every write mutation accepts userMessage', () => {
+    const writeFields = [
+      'saveNote',
+      'createNote',
+      'renameNote',
+      'deleteNote',
+      'createFolder',
+      'renameFolder',
+      'deleteFolder',
+      'moveNote',
+      'moveFolder',
+      'revertNote',
+      'vaultApplyReplacement',
+      'renameTag',
+      'deleteTag',
+    ];
+    for (const name of writeFields) {
+      const args = codexMutationFields[name].args ?? {};
+      expect(Object.keys(args), `${name}.args`).toContain('userMessage');
+    }
   });
 
   it('deleteFolder accepts a force flag', () => {

@@ -42,6 +42,10 @@ import {
   pinCodexNote,
   unpinCodexNote,
   vaultExists,
+  ensureNoteUuid,
+  getNoteMeta,
+  buildCodexCommitMessage,
+  type CodexCommitInput,
 } from '../server';
 import {
   CodexSaveResultType,
@@ -63,9 +67,30 @@ function authorFromUser(user: CodexUser) {
   };
 }
 
-function defaultMessage(verb: string, path: string, context: CodexGraphQLContext) {
-  const via = context.editedVia ?? 'Ostracon';
-  return `${verb} ${path} via ${via}`;
+/** Build the final commit message for a codex mutation.
+ *
+ *   1. If the caller passed a non-empty `commitMessage`, use it verbatim
+ *      (back-compat for scripts that compose their own message).
+ *   2. Otherwise, build a standardized message via
+ *      `buildCodexCommitMessage` with the verb, path, uuid (when known),
+ *      optional userMessage, and the host's `editedVia` tag. The result
+ *      always carries the trailers (`Note-Path:`, `Note-UUID:` if known,
+ *      `Edited-Via:`) so downstream tooling (audit log, search-index
+ *      sync, MCP) can extract structured fields.
+ */
+function commitMessageFor(
+  rawCommitMessage: string | undefined,
+  userMessage: string | undefined,
+  input: Omit<CodexCommitInput, 'userMessage' | 'editedVia'>,
+  context: CodexGraphQLContext,
+): string {
+  const raw = rawCommitMessage?.trim();
+  if (raw) return raw;
+  return buildCodexCommitMessage({
+    ...input,
+    userMessage: userMessage?.trim() || undefined,
+    editedVia: context.editedVia,
+  });
 }
 
 function outcomeToPayload(outcome: SaveOutcome) {
@@ -94,20 +119,28 @@ export const codexMutationFields: Record<
   saveNote: {
     type: new GraphQLNonNull(CodexSaveResultType),
     description:
-      'Update an existing vault note. baseSha must match the SHA the caller observed; otherwise CONFLICT is returned with the current content.',
+      'Update an existing vault note. baseSha must match the SHA the caller observed; otherwise CONFLICT is returned with the current content. Set `userMessage` for the standardized commit format with trailers; set `commitMessage` to override the whole message verbatim.',
     args: {
       path: { type: new GraphQLNonNull(GraphQLString) },
       content: { type: new GraphQLNonNull(GraphQLString) },
       baseSha: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        defaultMessage('Edit', args.path as string, context);
+      // Compute the post-injection UUID up front so the commit message
+      // carries the Note-UUID trailer. saveNote will idempotently re-run
+      // ensureNoteUuid internally; the only cost is one extra parse.
+      const { uuid } = ensureNoteUuid(args.content as string);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'edit', path: args.path as string, uuid },
+        context,
+      );
 
       const outcome = await saveNote({
         path: args.path as string,
@@ -126,15 +159,20 @@ export const codexMutationFields: Record<
     args: {
       path: { type: new GraphQLNonNull(GraphQLString) },
       content: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        defaultMessage('Create', args.path as string, context);
+      const { uuid } = ensureNoteUuid(args.content as string);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'create', path: args.path as string, uuid },
+        context,
+      );
 
       const outcome = await saveNote({
         path: args.path as string,
@@ -154,19 +192,26 @@ export const codexMutationFields: Record<
     args: {
       oldPath: { type: new GraphQLNonNull(GraphQLString) },
       newPath: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        `Rename ${args.oldPath as string} → ${args.newPath as string} via ${context.editedVia ?? 'Ostracon'}`;
+      const oldPath = args.oldPath as string;
+      const newPath = args.newPath as string;
+      const meta = await getNoteMeta(oldPath);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'rename', path: oldPath, newPath, uuid: meta?.uuid },
+        context,
+      );
 
       const outcome = await renameNote({
-        oldPath: args.oldPath as string,
-        newPath: args.newPath as string,
+        oldPath,
+        newPath,
         author: authorFromUser(user),
         commitMessage: message,
       });
@@ -180,18 +225,24 @@ export const codexMutationFields: Record<
       'Delete a vault note. Returns the list of paths that linked to the deleted note (now orphan links) so the UI can warn the user.',
     args: {
       path: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.delete');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        defaultMessage('Delete', args.path as string, context);
+      const targetPath = args.path as string;
+      const meta = await getNoteMeta(targetPath);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'delete', path: targetPath, uuid: meta?.uuid },
+        context,
+      );
 
       const outcome = await deleteNote({
-        path: args.path as string,
+        path: targetPath,
         author: authorFromUser(user),
         commitMessage: message,
       });
@@ -204,15 +255,19 @@ export const codexMutationFields: Record<
     description: 'Create a new vault folder. mkdir + drop a .gitkeep so git tracks the otherwise-empty directory.',
     args: {
       path: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        defaultMessage('Create folder', args.path as string, context);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'create-folder', path: args.path as string },
+        context,
+      );
 
       const outcome = await createFolder({
         path: args.path as string,
@@ -230,15 +285,23 @@ export const codexMutationFields: Record<
     args: {
       oldPath: { type: new GraphQLNonNull(GraphQLString) },
       newPath: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        `Rename folder ${args.oldPath as string} → ${args.newPath as string} via ${context.editedVia ?? 'Ostracon'}`;
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        {
+          verb: 'rename-folder',
+          path: args.oldPath as string,
+          newPath: args.newPath as string,
+        },
+        context,
+      );
 
       const outcome = await renameFolder({
         oldPath: args.oldPath as string,
@@ -257,15 +320,19 @@ export const codexMutationFields: Record<
     args: {
       path: { type: new GraphQLNonNull(GraphQLString) },
       force: { type: GraphQLBoolean },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.delete');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        defaultMessage('Delete folder', args.path as string, context);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'delete-folder', path: args.path as string },
+        context,
+      );
 
       const outcome = await deleteFolder({
         path: args.path as string,
@@ -284,19 +351,26 @@ export const codexMutationFields: Record<
     args: {
       oldPath: { type: new GraphQLNonNull(GraphQLString) },
       newParentPath: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        `Move ${args.oldPath as string} → ${args.newParentPath as string} via ${context.editedVia ?? 'Ostracon'}`;
+      const oldPath = args.oldPath as string;
+      const newParentPath = args.newParentPath as string;
+      const meta = await getNoteMeta(oldPath);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'move', path: oldPath, newPath: newParentPath, uuid: meta?.uuid },
+        context,
+      );
 
       const outcome = await moveNote({
-        oldPath: args.oldPath as string,
-        newParentPath: args.newParentPath as string,
+        oldPath,
+        newParentPath,
         author: authorFromUser(user),
         commitMessage: message,
       });
@@ -311,15 +385,23 @@ export const codexMutationFields: Record<
     args: {
       oldPath: { type: new GraphQLNonNull(GraphQLString) },
       newParentPath: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        `Move folder ${args.oldPath as string} → ${args.newParentPath as string} via ${context.editedVia ?? 'Ostracon'}`;
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        {
+          verb: 'move-folder',
+          path: args.oldPath as string,
+          newPath: args.newParentPath as string,
+        },
+        context,
+      );
 
       const outcome = await moveFolder({
         oldPath: args.oldPath as string,
@@ -338,20 +420,26 @@ export const codexMutationFields: Record<
     args: {
       path: { type: new GraphQLNonNull(GraphQLString) },
       sha: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
 
-      const sha = args.sha as string;
-      const message =
-        (args.commitMessage as string | undefined)?.trim() ||
-        `Revert ${args.path as string} to ${sha.slice(0, 7)} via ${context.editedVia ?? 'Ostracon'}`;
+      const targetPath = args.path as string;
+      const toSha = args.sha as string;
+      const meta = await getNoteMeta(targetPath);
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'revert', path: targetPath, toSha, uuid: meta?.uuid },
+        context,
+      );
 
       const outcome = await revertNote({
-        path: args.path as string,
-        sha,
+        path: targetPath,
+        sha: toSha,
         author: authorFromUser(user),
         commitMessage: message,
       });
@@ -371,11 +459,22 @@ export const codexMutationFields: Record<
       wholeWord: { type: GraphQLBoolean },
       wikilinkAware: { type: GraphQLBoolean },
       pathScope: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
+
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        {
+          verb: 'find-replace',
+          path: `${args.query as string} → ${args.replacement as string}`,
+        },
+        context,
+      );
 
       const outcome = await applyVaultReplacement({
         query: args.query as string,
@@ -386,7 +485,7 @@ export const codexMutationFields: Record<
         wikilinkAware: (args.wikilinkAware as boolean | undefined) ?? false,
         pathScope: (args.pathScope as string[] | undefined) ?? undefined,
         author: authorFromUser(user),
-        commitMessage: (args.commitMessage as string | undefined) ?? undefined,
+        commitMessage: message,
       });
       return applyOutcomeToPayload(outcome);
     },
@@ -399,16 +498,29 @@ export const codexMutationFields: Record<
     args: {
       oldTag: { type: new GraphQLNonNull(GraphQLString) },
       newTag: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.write');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
+
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        {
+          verb: 'rename-tag',
+          path: args.oldTag as string,
+          newPath: args.newTag as string,
+        },
+        context,
+      );
+
       const outcome = await renameTag({
         oldTag: args.oldTag as string,
         newTag: args.newTag as string,
         author: authorFromUser(user),
-        commitMessage: (args.commitMessage as string | undefined) ?? undefined,
+        commitMessage: message,
       });
       return tagMutationOutcomeToPayload(outcome);
     },
@@ -420,15 +532,24 @@ export const codexMutationFields: Record<
       'Remove a tag from every note frontmatter. Single atomic commit. Auto-managed notes skipped.',
     args: {
       tag: { type: new GraphQLNonNull(GraphQLString) },
+      userMessage: { type: GraphQLString },
       commitMessage: { type: GraphQLString },
     },
     resolve: async (_parent, args, context) => {
       const user = await requireCodexPermission(context, 'codex.delete');
       if (!(await vaultExists())) throw new Error('Vault not found on this server.');
+
+      const message = commitMessageFor(
+        args.commitMessage as string | undefined,
+        args.userMessage as string | undefined,
+        { verb: 'delete-tag', path: args.tag as string },
+        context,
+      );
+
       const outcome = await deleteTag({
         tag: args.tag as string,
         author: authorFromUser(user),
-        commitMessage: (args.commitMessage as string | undefined) ?? undefined,
+        commitMessage: message,
       });
       return tagMutationOutcomeToPayload(outcome);
     },
