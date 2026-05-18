@@ -20,10 +20,28 @@
 
 import type { PrismaClient } from '@prisma/client';
 import type { AuthAdapter } from '../server/auth-adapter';
+import type { EventAdapter } from '../server/event-adapter';
+import type { SearchAdapter } from '../server/search-adapter';
+import type { EmbeddingsAdapter } from '../server/embeddings-adapter';
+import type { AnnotationAdapter } from '../server/annotation-adapter';
 
 export interface CodexGraphQLContext {
   prisma: PrismaClient;
   codexAuth?: AuthAdapter;
+  /** Optional host adapter — receives every successful mutation event
+   *  so the host can keep derived state (search index, audit log,
+   *  embeddings) in sync. */
+  codexEvents?: EventAdapter;
+  /** Optional host adapter — when present, the search resolver delegates
+   *  to it; when absent, the resolver falls back to Ostracon's in-memory
+   *  substring + tag search. */
+  codexSearch?: SearchAdapter;
+  /** Optional host adapter — when present, semantic search modes light
+   *  up and concept-clustering / similarity features become available. */
+  codexEmbeddings?: EmbeddingsAdapter;
+  /** Optional host adapter — when present, the annotation/comment
+   *  GraphQL fields are populated. */
+  codexAnnotations?: AnnotationAdapter;
   /** Short tag interpolated into default commit messages. Hosts override
    *  this to attribute commits to a specific frontend (e.g. "HallOfRecords
    *  v1"). When undefined, falls back to "Ostracon". */
