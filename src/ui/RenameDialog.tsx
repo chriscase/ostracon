@@ -130,7 +130,7 @@ export default function RenameDialog({ open, oldPath, onClose, onRenamed }: Prop
         role="dialog"
         aria-modal="true"
       >
-        <h3 style={{ marginTop: 0 }}>Rename note</h3>
+        <h3 style={{ marginTop: 0 }}>Rename document</h3>
         <p style={{ marginTop: 0, fontSize: '0.85rem', opacity: 0.85 }}>
           Inbound wikilinks across the vault will be updated automatically. The
           rename and every rewrite are committed in a single git commit.

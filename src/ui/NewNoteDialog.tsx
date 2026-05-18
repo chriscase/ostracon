@@ -81,7 +81,7 @@ export default function NewNoteDialog({ open, onClose }: Props) {
               type="text"
               value={filename}
               onChange={(e) => setFilename(e.target.value)}
-              placeholder="My new note"
+              placeholder="My new document"
               autoFocus
             />
           </label>

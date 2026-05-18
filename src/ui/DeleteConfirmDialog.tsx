@@ -156,7 +156,7 @@ export default function DeleteConfirmDialog({ open, path, onClose, onDeleted }: 
         role="dialog"
         aria-modal="true"
       >
-        <h3 style={{ marginTop: 0 }}>Delete note</h3>
+        <h3 style={{ marginTop: 0 }}>Delete document</h3>
         <p style={{ marginTop: 0, fontSize: '0.85rem' }}>
           You are about to delete <strong>{path}</strong>. This action cannot be undone
           (the file is removed from the vault and committed to git history).
