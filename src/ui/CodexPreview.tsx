@@ -42,6 +42,10 @@ interface Props {
   onEdit?: () => void;
   /** Optional callback to open the per-note history side panel. */
   onShowHistory?: () => void;
+  /** Whether the history panel is currently open — toggles the History button's
+   *  pressed/active styling so the click registers visibly even if the panel
+   *  itself opens below the fold. */
+  historyOpen?: boolean;
 }
 
 const ACTIVITY_HEADING_RE = /\n## Activity[^\n]*\n(?:.*?\n)*?(?=\n## |$)/s;
@@ -162,7 +166,7 @@ function statusClass(status: string | null | undefined): string | null {
   }
 }
 
-export default function CodexPreview({ note, canEdit, onEdit, onShowHistory }: Props) {
+export default function CodexPreview({ note, canEdit, onEdit, onShowHistory, historyOpen }: Props) {
   const { Link } = useCodexNavigation();
   const md = useMemo(() => {
     const stripped = stripFrontmatter(note.content);
@@ -179,8 +183,13 @@ export default function CodexPreview({ note, canEdit, onEdit, onShowHistory }: P
         {sClass && <span className={`${styles.statusBadge} ${sClass}`}>{note.status}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
           {onShowHistory && (
-            <button type="button" className={styles.btnSecondary} onClick={onShowHistory}>
-              History
+            <button
+              type="button"
+              className={`${styles.btnSecondary}${historyOpen ? ' ' + styles.btnSecondaryActive : ''}`}
+              onClick={onShowHistory}
+              aria-pressed={historyOpen ? 'true' : 'false'}
+            >
+              {historyOpen ? 'Hide history' : 'History'}
             </button>
           )}
           {canEdit && onEdit && (

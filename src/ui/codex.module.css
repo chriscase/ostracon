@@ -1064,6 +1064,12 @@
   background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
 }
 
+.btnSecondaryActive {
+  background: rgba(120, 200, 255, 0.18);
+  border-color: rgba(120, 200, 255, 0.55);
+  color: rgb(180, 220, 255);
+}
+
 .btnDanger {
   background: rgba(220, 80, 80, 0.15);
   color: rgb(255, 130, 130);
