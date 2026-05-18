@@ -142,10 +142,14 @@ async function walk(
           body: parsed.content,
         };
         files.set(childRel, meta);
-        const lower = title.toLowerCase();
-        const arr = titles.get(lower) ?? [];
-        arr.push(childRel);
-        titles.set(lower, arr);
+        registerTitle(titles, title, childRel);
+        // Index frontmatter aliases the same way as filename basenames so
+        // [[Alias]] wikilinks resolve. Disambiguation (alias-on-alias or
+        // alias-on-basename collisions) falls through to resolveWikilink's
+        // existing folder-hint + alphabetical-first policy.
+        for (const alias of parsed.data.aliases ?? []) {
+          registerTitle(titles, alias, childRel);
+        }
       } catch {
         // Skip unreadable files; surfaces on next rebuild.
       }
@@ -185,4 +189,16 @@ export async function getTree(): Promise<TreeNode> {
 export async function getNoteMeta(rel: string): Promise<NoteMeta | null> {
   const idx = await getIndex();
   return idx.files.get(rel) ?? null;
+}
+
+function registerTitle(
+  titles: Map<string, string[]>,
+  key: string,
+  rel: string,
+): void {
+  const norm = key.trim().toLowerCase();
+  if (!norm) return;
+  const arr = titles.get(norm) ?? [];
+  if (!arr.includes(rel)) arr.push(rel);
+  titles.set(norm, arr);
 }
