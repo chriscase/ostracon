@@ -143,6 +143,15 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [folderFilter, setFolderFilter] = useState<Set<string>>(new Set());
+  // Declutter controls — both default to "show everything" so the graph
+  // behaves exactly as before until the user dials them up. The current
+  // graph drowns at corpus scale (Discover Taiji is ~470 docs); these
+  // two sliders let the reader drop the long tail and see the spine.
+  const [minDegree, setMinDegree] = useState<number>(0);
+  // Range: 0 (show all labels) to 1 (only hub nodes show labels). The
+  // value is multiplied against the max pageRank in the current graph
+  // so the threshold scales with the data.
+  const [labelDensity, setLabelDensity] = useState<number>(0);
   // Side preview pane: when set, the note at this path is rendered in a
   // resizable pane on the right. Click any note (in graph or list) to load it
   // here; click × in the pane header to close.
@@ -175,6 +184,8 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
     folderFilter: new Set<string>(),
     hoveredId: null as string | null,
     neighbors: null as Set<string> | null,
+    minDegree: 0,
+    labelMinPageRank: 0,
   });
 
   // Mobile detection — Sigma performs poorly under 768px and the labels are
@@ -457,14 +468,23 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
       | null;
     if (!sigma || !graph) return;
 
+    // Resolve labelDensity (0–1) against the max pageRank in the current
+    // graph so the threshold scales with the data: 0 → show all labels,
+    // 1 → hide every label except the single biggest hub.
+    let maxPr = 0;
+    if (data) for (const n of data.nodes) if (n.pageRank > maxPr) maxPr = n.pageRank;
+    const labelMinPageRank = labelDensity * maxPr;
+
     reducerStateRef.current = {
       search,
       folderFilter,
       hoveredId,
       neighbors: hoveredId ? new Set(graph.neighbors(hoveredId)) : null,
+      minDegree,
+      labelMinPageRank,
     };
     sigma.refresh();
-  }, [search, folderFilter, hoveredId]);
+  }, [search, folderFilter, hoveredId, minDegree, labelDensity, data]);
 
   if (isMobile)
     return (
@@ -549,13 +569,15 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
               </button>
             );
           })}
-          {(folderFilter.size > 0 || search) && (
+          {(folderFilter.size > 0 || search || minDegree > 0 || labelDensity > 0) && (
             <button
               type="button"
               className={styles.graphResetButton}
               onClick={() => {
                 setFolderFilter(new Set());
                 setSearch('');
+                setMinDegree(0);
+                setLabelDensity(0);
               }}
             >
               Reset
@@ -572,6 +594,54 @@ export default function CodexGraph({ scope, noteFocus, noteFocusDepth = 2 }: Pro
             {noteFocus ? 'click → re-pivot' : 'click → drill in / linkages'}
           </span>
         </div>
+
+        {/* Declutter sliders. Show only on note-mode graphs (folder
+            drilldown or noteFocus) — the top-level supernode view has
+            only ~10 nodes so the sliders don't do anything useful. */}
+        {(data?.scope || noteFocus) && (
+          <div className={styles.graphSliders}>
+            <label className={styles.graphSliderLabel}>
+              <span className={styles.graphSliderName}>
+                Min connections
+                <span className={styles.graphSliderValue}>
+                  {minDegree > 0 ? `≥ ${minDegree}` : 'all'}
+                </span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={20}
+                step={1}
+                value={minDegree}
+                onChange={(e) => setMinDegree(parseInt(e.target.value, 10))}
+                className={styles.graphSliderInput}
+                aria-label="Hide nodes with fewer than this many connections"
+              />
+            </label>
+            <label className={styles.graphSliderLabel}>
+              <span className={styles.graphSliderName}>
+                Label density
+                <span className={styles.graphSliderValue}>
+                  {labelDensity === 0
+                    ? 'all'
+                    : labelDensity >= 0.95
+                    ? 'hubs only'
+                    : `top ${Math.round((1 - labelDensity) * 100)}%`}
+                </span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={labelDensity}
+                onChange={(e) => setLabelDensity(parseFloat(e.target.value))}
+                className={styles.graphSliderInput}
+                aria-label="Only show labels on nodes above this pageRank"
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       <div className={styles.graphHeader}>
@@ -809,19 +879,38 @@ type ReducerStateRef = React.MutableRefObject<{
   folderFilter: Set<string>;
   hoveredId: string | null;
   neighbors: Set<string> | null;
+  /** Hide nodes whose total in+out degree falls below this. */
+  minDegree: number;
+  /** Hide labels on nodes whose pageRank is below this. The node itself
+   *  still renders; only the label is culled. */
+  labelMinPageRank: number;
 }>;
 
 function makeNodeReducer(stateRef: ReducerStateRef) {
   return (node: string, attrs: Record<string, unknown>) => {
-    const { search, folderFilter, hoveredId, neighbors } = stateRef.current;
+    const {
+      search,
+      folderFilter,
+      hoveredId,
+      neighbors,
+      minDegree,
+      labelMinPageRank,
+    } = stateRef.current;
 
-    // Apply text + folder filters.
+    // Apply text + folder + min-degree filters.
     const label = String(attrs.label ?? '');
     const folder = String(attrs.folder ?? '');
+    const degree = Number(attrs.degree ?? 0);
+    const pageRank = Number(attrs.pageRank ?? 0);
     if (search && !label.toLowerCase().includes(search.toLowerCase())) {
       return { ...attrs, hidden: true };
     }
     if (folderFilter.size > 0 && !folderFilter.has(folder)) {
+      return { ...attrs, hidden: true };
+    }
+    // Min-degree filter applies only to NOTE nodes — SUPERNODEs always
+    // show so the user can still see the folder structure.
+    if (minDegree > 0 && attrs.kind !== 'SUPERNODE' && degree < minDegree) {
       return { ...attrs, hidden: true };
     }
 
@@ -832,8 +921,19 @@ function makeNodeReducer(stateRef: ReducerStateRef) {
         return { ...attrs, color: DIM_COLOR, label: '', zIndex: 0 };
       }
       // Hovered node + its neighbors: keep label visible even if it'd
-      // normally be culled by labelDensity.
+      // normally be culled.
       return { ...attrs, forceLabel: true, zIndex: 2 };
+    }
+
+    // Label-density: hide labels on nodes below the pageRank threshold.
+    // The node still renders; only the text is culled — preserves the
+    // structure while dramatically reducing visual noise.
+    if (
+      labelMinPageRank > 0 &&
+      attrs.kind !== 'SUPERNODE' &&
+      pageRank < labelMinPageRank
+    ) {
+      return { ...attrs, label: '' };
     }
 
     // Default: keep labels visible. Sigma's labelDensity / labelGridCellSize
@@ -855,7 +955,7 @@ function makeEdgeReducer(
   },
 ) {
   return (edge: string, attrs: Record<string, unknown>) => {
-    const { search, folderFilter, hoveredId } = stateRef.current;
+    const { search, folderFilter, hoveredId, minDegree } = stateRef.current;
 
     const sId = graph.source(edge);
     const tId = graph.target(edge);
@@ -865,13 +965,19 @@ function makeEdgeReducer(
     const tLabel = String(tAttrs.label ?? '');
     const sFolder = String(sAttrs.folder ?? '');
     const tFolder = String(tAttrs.folder ?? '');
+    const sDegree = Number(sAttrs.degree ?? 0);
+    const tDegree = Number(tAttrs.degree ?? 0);
+    const sKind = String(sAttrs.kind ?? '');
+    const tKind = String(tAttrs.kind ?? '');
 
     const sHidden =
       (search && !sLabel.toLowerCase().includes(search.toLowerCase())) ||
-      (folderFilter.size > 0 && !folderFilter.has(sFolder));
+      (folderFilter.size > 0 && !folderFilter.has(sFolder)) ||
+      (minDegree > 0 && sKind !== 'SUPERNODE' && sDegree < minDegree);
     const tHidden =
       (search && !tLabel.toLowerCase().includes(search.toLowerCase())) ||
-      (folderFilter.size > 0 && !folderFilter.has(tFolder));
+      (folderFilter.size > 0 && !folderFilter.has(tFolder)) ||
+      (minDegree > 0 && tKind !== 'SUPERNODE' && tDegree < minDegree);
     if (sHidden || tHidden) return { ...attrs, hidden: true };
 
     if (hoveredId) {
