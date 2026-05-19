@@ -227,7 +227,12 @@
 }
 
 .markdown {
-  line-height: 1.65;
+  /* Prose surface: prefer the host app's serif stack (--ui-serif) for long-form reading.
+     Falls through to var(--font-serif) (next/font name only) then to a system serif chain. */
+  font-family: var(--ui-serif, var(--font-serif, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif));
+  font-size: 1.0625rem;
+  line-height: 1.7;
+  letter-spacing: 0.005em;
   color: var(--text-primary);
 }
 
@@ -237,16 +242,18 @@
 .markdown h4 {
   margin: 1.5rem 0 0.75rem 0;
   line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 
-.markdown h1 { font-size: 1.5rem; }
-.markdown h2 { font-size: 1.25rem; }
-.markdown h3 { font-size: 1.1rem; }
+.markdown h1 { font-size: 1.625rem; }
+.markdown h2 { font-size: 1.35rem; }
+.markdown h3 { font-size: 1.15rem; }
 
 .markdown p,
 .markdown ul,
 .markdown ol {
-  margin: 0.6rem 0;
+  margin: 0.7rem 0;
 }
 
 .markdown ul,
