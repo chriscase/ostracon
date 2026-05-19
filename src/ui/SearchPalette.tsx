@@ -55,10 +55,11 @@ interface Hit {
   };
 }
 
-type Mode = 'hybrid' | 'fulltext' | 'substring' | 'tags';
+type Mode = 'hybrid' | 'semantic' | 'fulltext' | 'substring' | 'tags';
 
-const MODES: Array<{ id: Mode; label: string; hint: string }> = [
-  { id: 'hybrid', label: 'Hybrid', hint: 'Ranked across signals' },
+const ALL_MODES: Array<{ id: Mode; label: string; hint: string; requiresSemantic?: boolean }> = [
+  { id: 'hybrid', label: 'Hybrid', hint: 'Keyword + meaning combined' },
+  { id: 'semantic', label: 'Semantic', hint: 'Find by meaning', requiresSemantic: true },
   { id: 'fulltext', label: 'Full-text', hint: 'tsvector ranking' },
   { id: 'substring', label: 'Substring', hint: 'Plain ILIKE / contains' },
   { id: 'tags', label: 'Tags', hint: 'Match notes carrying a tag' },
@@ -139,9 +140,13 @@ export interface SearchPaletteProps {
   /** Render path for hit results. Defaults to `/admin/codex/note/<path>` —
    *  override if the host mounts codex routes elsewhere. */
   noteHref?: (path: string) => string;
+  /** When true, expose the Semantic mode chip. When false (default), the
+   *  Semantic chip is hidden — but Hybrid stays visible because the host
+   *  can still rank tsvector hits even without an embedding backend. */
+  semanticEnabled?: boolean;
 }
 
-export function SearchPalette({ noteHref }: SearchPaletteProps) {
+export function SearchPalette({ noteHref, semanticEnabled = false }: SearchPaletteProps) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [query, setQuery] = useState('');
@@ -167,6 +172,11 @@ export function SearchPalette({ noteHref }: SearchPaletteProps) {
           .map((seg) => encodeURIComponent(seg))
           .join('/')),
     [noteHref],
+  );
+
+  const visibleModes = useMemo(
+    () => ALL_MODES.filter((m) => !m.requiresSemantic || semanticEnabled),
+    [semanticEnabled],
   );
 
   // Mount portal once (avoid SSR mismatch).
@@ -363,7 +373,7 @@ export function SearchPalette({ noteHref }: SearchPaletteProps) {
         </div>
 
         <div className={styles.paletteModeRow} role="tablist" aria-label="Search mode">
-          {MODES.map((m) => (
+          {visibleModes.map((m) => (
             <button
               key={m.id}
               type="button"
